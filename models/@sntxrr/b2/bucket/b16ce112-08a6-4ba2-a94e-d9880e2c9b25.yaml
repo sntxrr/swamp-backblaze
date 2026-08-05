@@ -1,0 +1,15 @@
+type: '@sntxrr/b2/bucket'
+typeVersion: 2026.08.05.2
+id: b16ce112-08a6-4ba2-a94e-d9880e2c9b25
+name: b2-flip
+version: 1
+tags: {}
+globalArguments:
+  applicationKeyId: '${{ env.B2_APPLICATION_KEY_ID }}'
+  applicationKey: '${{ env.B2_APPLICATION_KEY }}'
+  bucketName: '${{ env.B2_FLIP_BUCKET }}'
+  lifecycleRules:
+    - fileNamePrefix: ''
+      daysFromUploadingToHiding: null
+      daysFromHidingToDeleting: 1
+methods: {}

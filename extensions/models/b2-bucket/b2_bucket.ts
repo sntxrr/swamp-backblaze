@@ -601,6 +601,12 @@ type GlobalArgs = z.infer<typeof GlobalArgsSchema>;
 
 /** Arguments shared by `create` and `update`: per-run overrides of globalArgs. */
 const BucketConfigArgsSchema = z.object({
+  allowPublicBucket: z.boolean().optional().describe(
+    "Acknowledge, for this run only, that bucketType may be allPublic. " +
+      "Overrides globalArgs.allowPublicBucket. Needed because `swamp model " +
+      "method run` has no --global-arg flag, so without this the only way to " +
+      "waive the guard would be to edit the model definition.",
+  ),
   bucketType: z.enum(["allPrivate", "allPublic"]).optional().describe(
     "Override globalArgs.bucketType for this run.",
   ),
@@ -917,14 +923,16 @@ export function redactNotificationRule(
 export function assertPublicBucketAllowed(
   desiredBucketType: string | undefined,
   g: { bucketName: string; allowPublicBucket?: boolean },
+  argAllowPublicBucket?: boolean,
 ): void {
   if (desiredBucketType !== "allPublic") return;
-  if (g.allowPublicBucket) return;
+  if (argAllowPublicBucket ?? g.allowPublicBucket) return;
   throw new Error(
     `Refusing to set bucket "${g.bucketName}" to allPublic: everything in it ` +
       `becomes readable by anyone who learns the bucket name, and a restic ` +
       `repository must never be public. If this bucket genuinely should be ` +
-      `public, set allowPublicBucket=true on the model to acknowledge it.`,
+      `public, acknowledge it with --input allowPublicBucket=true for a single ` +
+      `run, or set allowPublicBucket=true on the model to make it permanent.`,
   );
 }
 
@@ -1131,7 +1139,7 @@ export const model = {
           bucketName: g.bucketName,
           bucketType: (() => {
             const t = pick(args.bucketType, g.bucketType) ?? "allPrivate";
-            assertPublicBucketAllowed(t, g);
+            assertPublicBucketAllowed(t, g, args.allowPublicBucket);
             return t;
           })(),
         };
@@ -1205,7 +1213,7 @@ export const model = {
         };
         const bucketType = pick(args.bucketType, g.bucketType);
         if (bucketType !== undefined) {
-          assertPublicBucketAllowed(bucketType, g);
+          assertPublicBucketAllowed(bucketType, g, args.allowPublicBucket);
           payload.bucketType = bucketType;
         }
         const lifecycleRules = pick(args.lifecycleRules, g.lifecycleRules);

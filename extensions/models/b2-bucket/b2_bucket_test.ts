@@ -1754,6 +1754,37 @@ Deno.test("making a bucket public requires an explicit acknowledgement", () => {
     ...g,
     allowPublicBucket: true,
   });
+  // Per-run acknowledgement, which is the only form reachable from
+  // `swamp model method run` — it has no --global-arg flag.
+  _internal.assertPublicBucketAllowed("allPublic", g, true);
+});
+
+Deno.test("--input allowPublicBucket=true is a usable per-run waiver", async () => {
+  // The guard must be waivable by a command an operator can actually type.
+  // `swamp model method run` accepts --input but NOT --global-arg, so a
+  // globalArgs-only waiver would mean the only way to make a bucket public is
+  // to edit the model definition — which is not what the error message says.
+  const f = installFetch((_req, i) =>
+    i === 0 ? json(authBody()) : json(bucketBody({ bucketType: "allPublic" }))
+  );
+  const { context, written } = makeContext(
+    baseGlobalArgs({ bucketId: BUCKET_ID }),
+  );
+  try {
+    await model.methods.update.execute(
+      { bucketType: "allPublic", allowPublicBucket: true },
+      context,
+    );
+    const sent = JSON.parse(
+      f.calls.find((c) => c.url.includes("b2_update_bucket"))?.body ?? "{}",
+    );
+    assertEquals(sent.bucketType, "allPublic");
+    // The acknowledgement is a local policy flag and must never be sent to B2.
+    assertFalse("allowPublicBucket" in sent);
+    assertEquals(written.length, 1);
+  } finally {
+    f.restore();
+  }
 });
 
 Deno.test("update --input bucketType=allPublic is blocked, though no check can see it", async () => {

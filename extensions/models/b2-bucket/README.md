@@ -89,10 +89,20 @@ learns its name, and B2 makes the flip a one-liner that takes effect immediately
 # Refused
 swamp model method run my-bucket update --input bucketType=allPublic
 
-# Allowed, deliberately
+# Allowed for this run only
 swamp model method run my-bucket update \
-  --input bucketType=allPublic --global-arg allowPublicBucket=true
+  --input bucketType=allPublic --input allowPublicBucket=true
+
+# Or permanently, on the model itself
+swamp model create @sntxrr/b2/bucket my-bucket \
+  --global-arg 'allowPublicBucket=true' ...
 ```
+
+Note `swamp model method run` takes `--input` but **not** `--global-arg` — that
+flag exists only on `swamp model create`. `allowPublicBucket` is therefore
+accepted as a method input as well as a global argument, so the waiver is
+reachable without editing the model definition. It is a local policy flag and is
+never sent to B2.
 
 > **The real enforcement is in the methods, not in this check.** swamp gives a
 > pre-flight check the model's global arguments but never the method's inputs,
