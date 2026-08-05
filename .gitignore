@@ -12,3 +12,11 @@
 .claude/scheduled_tasks.lock
 .claude/scheduled_tasks.json
 # END swamp managed section
+
+# Vault definitions. `swamp vault create --config` persists whatever it is
+# given verbatim, and marking a field `sensitive` governs logging, not what
+# lands on disk — so a literal token passed on the command line becomes a live
+# credential in a tracked file. These repositories are public. Never commit a
+# vault definition; wire secrets as ${{ env.* }} references and keep the file
+# out of git regardless.
+vaults/
