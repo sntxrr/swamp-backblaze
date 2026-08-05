@@ -1067,7 +1067,7 @@ export function isAlreadyGone(e: unknown): boolean {
  */
 export const model = {
   type: "@sntxrr/b2/bucket",
-  version: "2026.08.05.2",
+  version: "2026.08.05.3",
   globalArguments: GlobalArgsSchema,
   resources: {
     "bucket": {

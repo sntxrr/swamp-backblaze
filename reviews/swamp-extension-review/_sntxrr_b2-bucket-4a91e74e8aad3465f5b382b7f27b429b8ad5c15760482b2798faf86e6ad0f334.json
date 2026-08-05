@@ -1,0 +1,82 @@
+{
+  "extension": "@sntxrr/b2-bucket",
+  "version": "2026.08.05.3",
+  "reviewedAt": "2026-08-05T22:55:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "applicationKey is .meta({ sensitive: true }) and wired from a vault or an env reference; the 24h authorizationToken is a bearer credential that is never logged and never written into a resource. A test executes every method and asserts no snapshot and no log line contains either value. Notification rules add two secret surfaces \u2014 hmacSha256SigningSecret and arbitrary custom header values \u2014 and redactNotificationRule strips both before any snapshot."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Every method logs entry and completion with structured placeholders \u2014 logger.info(\"...{field}\", { field }) \u2014 and no logger call uses a template literal. Completion lines carry enough to distinguish outcomes."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "b2Fetch attaches status and B2 code to the thrown error rather than collapsing to a string, retries only 429/503/500 with bounded backoff honoring Retry-After, and re-authorizes exactly once on 401 expired_auth_token. A 401 from a missing capability is explicitly not transient and is never retried."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "64 tests, all mocked, plus a full live write cycle: create -> sync -> update -> delete against real B2, with the lifecycle rule round-tripping and the retention window moving 1 -> 2 days. A separate live run proved the visibility round trip allPrivate -> allPublic -> allPrivate and that a lifecycle-only update leaves visibility untouched. Fixes are proven by mutation in both directions \u2014 removing the public-bucket guard from update's execute leaves the bucket-visibility check passing its own test green while --input bucketType=allPublic sails through, which is exactly why the guard does not live only in the check."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "delete is idempotent on both documented already-gone signals and still writes an exists=false tombstone plus a notificationRules tombstone, so infinite-lifetime webhook rules cannot outlive their bucket. update sends only supplied fields, so it cannot silently flip an allPublic bucket private."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Built against the v4 nested apiInfo.storageApi shape, with the authorize guard validating apiUrl, downloadUrl and s3ApiUrl before any is dereferenced. Live-verified against real Backblaze B2 on 2026-08-05, not only mocked. A real authorize and list round-trip returned the modelled shape exactly."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Mechanical field-coverage run by execution against live code: spec bucket 19/19 fields across 4 writes, spec notificationRules 5/5 across 3 writes, 1:1 both ways. Script committed at reviews/mechanical-verification.ts."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Audited before the repository was made public: every identifier in code, tests and docs is a fixture. All 74 real identifiers extracted from a live account scan were cross-checked against every blob in git history with zero matches. Real scan output lives under .swamp/, which is gitignored with no tracked files. Smoke-test model instances take their targets through env references so no real bucket name or key ID is committed."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Deliberately asymmetric and now tested to stay so: strict on what is SENT (globalArgs.bucketInfo is Record<string,string> because B2 requires it; lifecycle and notification rule inputs are fully structured), permissive on what is READ BACK, so one unexpected value cannot make a whole snapshot unwritable and cost all visibility into the bucket."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Both specs lifetime infinite, garbageCollection 50. Infinite is required: the policy check reads a prior snapshot to decide whether a bucket already prunes, so an expiring record would silently weaken that gate."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "sync, create, update, delete, get_notification_rules, set_notification_rules. Drift detection works because sync reads full state including derived verdicts; update supports optimistic concurrency via ifRevisionIs."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "issue",
+      "note": "Two checks, both labelled policy and scoped to create/update so they genuinely auto-fire. The recorded issue is a platform boundary that operators must understand: swamp gives a check the model's global arguments but NEVER the method's inputs, so neither check can see --input. lifecycle-hidden-version-retention therefore fails a create that supplies rules via --input, and its error now says so explicitly rather than claiming nothing was declared. bucket-visibility would likewise be blind to --input bucketType=allPublic, so the authoritative guard for that lives inside create/update and the README states which layer is load-bearing. Verified live: the refusal fired, and the waiver was initially untypeable because `swamp model method run` has no --global-arg flag \u2014 allowPublicBucket is now a method input too."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Enumerated by execution across all six methods: the two specs never share an instance name. A bucket named exactly \"latest\" is aliased to bucket-latest, since latest is a reserved swamp data name rejected at write time only and is a legal 6-character B2 name."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "LIVE-VERIFIED end to end against real Backblaze B2 on 2026-08-05. Snapshots expose derived verdicts CEL can read directly: prunesHiddenVersions, minDaysFromHidingToDeleting, unprunedPrefixes, defaultRetentionPeriod, replicationConfigured. A live scan exposed unprunedPrefixes reporting [] for a bucket with NO lifecycle rules \u2014 reading as 'nothing accumulates' when every file does. Fixed to [\"\"], and the pre-existing unit test that had encoded the wrong value was corrected."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "2026.08.05.2 -> .3. Adds the allowPublicBucket global argument and method input plus the bucket-visibility check, and corrects the lifecycle check's error message. No snapshot field changed shape, so no reader breaks. The only behaviour change is that setting bucketType=allPublic now requires an explicit acknowledgement \u2014 deliberately breaking for anyone who was relying on an ungated flip to public."
+    }
+  ]
+}

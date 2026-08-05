@@ -929,7 +929,7 @@ export const model = {
   type: "@sntxrr/b2/key",
   description:
     "Manage a Backblaze B2 application key via the Native API v4 — sync, create (with the one-shot secret delivered to 1Password Connect), and idempotent delete",
-  version: "2026.08.05.2",
+  version: "2026.08.05.3",
   globalArguments: GlobalArgsSchema,
   resources: {
     "key": {
