@@ -587,3 +587,44 @@ Mock `fetch` — no live B2 calls in unit tests. Cover at minimum:
 6. `delete` treats "already gone" as success.
 7. **No secret leaks:** assert that no resource snapshot your model writes
    contains `applicationKey` or `authorizationToken`.
+
+### 10.1 The `writeResource` stub MUST validate (non-negotiable)
+
+A stub that only records what it was handed proves nothing about it. Every bug
+mechanical review has found in this suite lived in a **derived** field — the raw
+B2 data was correct in every single case — and a recording-only stub is blind to
+exactly that class of bug. This is not hypothetical: reverting a genuine
+`corsRules` mapper fix in `b2-bucket` left all 47 tests green.
+
+So the harness must parse each write against the real spec schema, the way swamp
+does at run time:
+
+```ts
+writeResource: (spec, name, data) => {
+  const resourceSpec =
+    (model.resources as Record<string, { schema: z.ZodType }>)[spec];
+  if (!resourceSpec) {
+    throw new Error(`writeResource called with unknown spec "${spec}"`);
+  }
+  const parsed = resourceSpec.schema.safeParse(data);
+  if (!parsed.success) {
+    throw new Error(
+      `writeResource("${spec}", "${name}") wrote data that the spec schema ` +
+        `rejects — swamp would fail this at run time: ` +
+        JSON.stringify(parsed.error.issues),
+    );
+  }
+  written.push({ spec, name, data });
+  return Promise.resolve({ name });
+},
+```
+
+Build the context's `globalArgs` with `model.globalArguments.parse(...)` too, not
+the raw literal — schema defaults and coercions are part of what a real run
+applies, and passing the object through untouched skips them.
+
+**Prove the harness bites before you trust it.** Green tests after adding
+validation are not evidence the validation works; they are equally consistent
+with a no-op. Mutate one derived field to a wrong type (`bucketIds` → joined
+string, a boolean → `String(...)`), confirm tests fail *with the schema-rejection
+message*, then revert. A harness that has never failed has never been tested.

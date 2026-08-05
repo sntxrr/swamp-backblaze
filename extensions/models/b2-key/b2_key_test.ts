@@ -6,6 +6,7 @@
  * @module
  */
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
+import { z } from "npm:zod@4";
 import {
   b2Authorize,
   b2Fetch,
@@ -65,18 +66,38 @@ function makeContext(globalArgs: Record<string, unknown>): {
   > = [];
   const warnings: string[] = [];
   const ctx = {
-    globalArgs,
+    // Parse rather than pass through: defaults and coercions declared on the
+    // global-argument schema are part of the contract a real run applies.
+    globalArgs: model.globalArguments.parse(globalArgs),
     logger: {
       info: () => {},
       warn: (m: string) => {
         warnings.push(m);
       },
     },
+    // Validate against the REAL resource schema, exactly as swamp does at run
+    // time. A stub that only records cannot catch a schema-conformance bug:
+    // reverting a genuine mapper fix in b2-bucket left every test green until
+    // this validation was added. Every bug mechanical review has found in this
+    // suite lived in a derived field, which is precisely what this catches.
     writeResource: (
       spec: string,
       name: string,
       data: Record<string, unknown>,
     ) => {
+      const resourceSpec =
+        (model.resources as Record<string, { schema: z.ZodType }>)[spec];
+      if (!resourceSpec) {
+        throw new Error(`writeResource called with unknown spec "${spec}"`);
+      }
+      const parsed = resourceSpec.schema.safeParse(data);
+      if (!parsed.success) {
+        throw new Error(
+          `writeResource("${spec}", "${name}") wrote data that the spec ` +
+            `schema rejects — swamp would fail this at run time: ` +
+            JSON.stringify(parsed.error.issues),
+        );
+      }
       writes.push({ spec, name, data });
       return Promise.resolve({ name });
     },
