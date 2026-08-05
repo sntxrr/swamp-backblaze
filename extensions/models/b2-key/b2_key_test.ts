@@ -1131,3 +1131,63 @@ Deno.test("toKeyResource never copies applicationKey out of a raw response", () 
   assertEquals(Object.hasOwn(out, "applicationKey"), false);
   assertEquals(JSON.stringify(out).includes(SECRET), false);
 });
+
+Deno.test("an account-wide key reports bucketIds as [], never null", async () => {
+  // Live finding, 2026-08-05: syncing a real account-wide key snapshotted
+  // bucketIds: null, while the sibling b2-account model normalizes the same B2
+  // field to []. Two models describing the same key disagreed about its shape,
+  // so a consumer testing `bucketIds.length === 0` for "account-wide" works
+  // against one and throws against the other. [] is the honest encoding:
+  // b2_list_keys has no "unknown" case — absent means unrestricted.
+  await withMockedFetch(
+    (url) =>
+      url.includes("b2_authorize_account")
+        ? json(authBody())
+        : json({ keys: [{
+          applicationKeyId: KEY_ID,
+          keyName: "example-account-wide",
+          capabilities: ["listBuckets"],
+          // B2 omits bucketIds entirely for an unrestricted key.
+          namePrefix: null,
+          expirationTimestamp: null,
+          options: ["s3"],
+          accountId: AUTH.accountId,
+        }], nextApplicationKeyId: null }),
+    async () => {
+      const { ctx, writes } = makeContext({ ...BASE_GLOBALS, managedKeyId: KEY_ID });
+      await model.methods.sync.execute({}, ctx);
+      assertEquals(writes.length, 1);
+      assertEquals(
+        writes[0].data.bucketIds,
+        [],
+        "absent bucketIds means account-wide, and must serialize as an empty array",
+      );
+    },
+  );
+});
+
+Deno.test("a stale singular bucketId degrades to a one-element array", async () => {
+  // Mirrors b2-account: a v2-style or proxied response carrying scalar
+  // bucketId must not be read as an unrestricted key, which would misreport a
+  // scoped key's blast radius as account-wide.
+  await withMockedFetch(
+    (url) =>
+      url.includes("b2_authorize_account")
+        ? json(authBody())
+        : json({ keys: [{
+          applicationKeyId: KEY_ID,
+          keyName: "example-legacy",
+          capabilities: ["listBuckets"],
+          bucketId: "b1f2a3c4d5e6f708192a3b4c",
+          namePrefix: null,
+          expirationTimestamp: null,
+          options: [],
+          accountId: AUTH.accountId,
+        }], nextApplicationKeyId: null }),
+    async () => {
+      const { ctx, writes } = makeContext({ ...BASE_GLOBALS, managedKeyId: KEY_ID });
+      await model.methods.sync.execute({}, ctx);
+      assertEquals(writes[0].data.bucketIds, ["b1f2a3c4d5e6f708192a3b4c"]);
+    },
+  );
+});

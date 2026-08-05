@@ -719,6 +719,20 @@ export function analyzeHiddenVersionRetention(
   minDaysFromHidingToDeleting: number | null;
   unprunedPrefixes: string[];
 } {
+  // No rules at all is the worst case, not a neutral one: every file in the
+  // bucket accumulates hidden versions forever. It is semantically identical to
+  // a single catch-all rule that never deletes, so report it identically —
+  // [""] — rather than []. An empty list reads as "no prefix is accumulating",
+  // which is the exact opposite of the truth, and would hide precisely the
+  // buckets a consumer scanning `unprunedPrefixes` is looking for.
+  if (rules.length === 0) {
+    return {
+      prunesHiddenVersions: false,
+      minDaysFromHidingToDeleting: null,
+      unprunedPrefixes: [""],
+    };
+  }
+
   const pruning: number[] = [];
   const unprunedPrefixes: string[] = [];
   for (const rule of rules) {
@@ -1015,7 +1029,7 @@ export function isAlreadyGone(e: unknown): boolean {
  */
 export const model = {
   type: "@sntxrr/b2/bucket",
-  version: "2026.08.05.1",
+  version: "2026.08.05.2",
   globalArguments: GlobalArgsSchema,
   resources: {
     "bucket": {

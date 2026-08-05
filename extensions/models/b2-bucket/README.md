@@ -39,7 +39,7 @@ Every snapshot this model writes carries the verdict directly:
 | ----------------------------- | ------------------------------------------------------------------ |
 | `prunesHiddenVersions`        | `false` means hidden versions are retained — and billed — forever  |
 | `minDaysFromHidingToDeleting` | Smallest retention window across the bucket's rules, or `null`     |
-| `unprunedPrefixes`            | Prefixes whose rule has no `daysFromHidingToDeleting`              |
+| `unprunedPrefixes`            | Prefixes accumulating hidden versions forever. A bucket with **no** lifecycle rule reports `[""]` (all files), never `[]` |
 
 ## Methods
 

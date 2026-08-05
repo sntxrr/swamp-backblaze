@@ -602,12 +602,16 @@ Deno.test("b2Fetch does not retry a 401 unauthorized — a missing capability is
 // ---------------------------------------------------------------------------
 
 Deno.test("analyzeHiddenVersionRetention distinguishes pruning from unpruned prefixes", () => {
+  // No rules means every file accumulates hidden versions forever, so the
+  // catch-all prefix is unpruned. This assertion previously expected [] — it
+  // encoded the bug rather than catching it, and a live scan of a real
+  // rule-less bucket is what exposed that.
   assertEquals(
     _internal.analyzeHiddenVersionRetention([]),
     {
       prunesHiddenVersions: false,
       minDaysFromHidingToDeleting: null,
-      unprunedPrefixes: [],
+      unprunedPrefixes: [""],
     },
   );
   assertEquals(
@@ -1661,4 +1665,46 @@ Deno.test("a half-read retention period is reported as null, not as a concrete w
     true,
     "a half-read period must still produce a writable snapshot",
   );
+});
+
+Deno.test("a bucket with NO lifecycle rules reports every prefix as unpruned", () => {
+  // Live finding, 2026-08-05: a real bucket with lifecycleRules: [] snapshotted
+  // unprunedPrefixes: [] — which reads as "no prefix accumulates hidden
+  // versions" when the truth is that ALL of them do. A consumer looking for
+  // bleeding buckets with `unprunedPrefixes.length > 0` would skip exactly the
+  // worst case: a bucket with no retention rule at all.
+  //
+  // No rules is semantically identical to one rule covering every file that
+  // never deletes, so it must report the same way: [""].
+  const none = _internal.analyzeHiddenVersionRetention([]);
+  assertEquals(none.prunesHiddenVersions, false);
+  assertEquals(none.minDaysFromHidingToDeleting, null);
+  assertEquals(
+    none.unprunedPrefixes,
+    [""],
+    'no rules means all files accumulate — the empty prefix, not an empty list',
+  );
+
+  // An explicit catch-all rule that never deletes must produce the same answer.
+  const explicit = _internal.analyzeHiddenVersionRetention([
+    { fileNamePrefix: "", daysFromUploadingToHiding: null, daysFromHidingToDeleting: null },
+  ]);
+  assertEquals(explicit.unprunedPrefixes, none.unprunedPrefixes);
+  assertEquals(explicit.prunesHiddenVersions, none.prunesHiddenVersions);
+});
+
+Deno.test("sync of a rule-less bucket writes the all-files unpruned marker", async () => {
+  const f = installFetch((_req, i) =>
+    i === 0 ? json(authBody()) : json({ buckets: [bucketBody({ lifecycleRules: [] })] })
+  );
+  const { context, written } = makeContext(baseGlobalArgs({}));
+  try {
+    await model.methods.sync.execute({}, context);
+    const snap = written.find((w) => w.spec === "bucket");
+    assert(snap);
+    assertEquals(snap.data.prunesHiddenVersions, false);
+    assertEquals(snap.data.unprunedPrefixes, [""]);
+  } finally {
+    f.restore();
+  }
 });

@@ -1,0 +1,82 @@
+{
+  "extension": "@sntxrr/b2-account",
+  "version": "2026.08.05.1",
+  "reviewedAt": "2026-08-05T22:20:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "applicationKey is .meta({ sensitive: true }) and wired from a vault or an env reference; the 24h authorizationToken is a bearer credential that is never logged and never written into a resource. A test executes every method and asserts no snapshot and no log line contains either value."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Every method logs entry and completion with structured placeholders \u2014 logger.info(\"...{field}\", { field }) \u2014 and no logger call uses a template literal. Completion lines carry enough to distinguish outcomes."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "b2Fetch attaches status and B2 code to the thrown error rather than collapsing to a string, retries only 429/503/500 with bounded backoff honoring Retry-After, and re-authorizes exactly once on 401 expired_auth_token. A 401 from a missing capability is explicitly not transient and is never retried."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "27 tests, all mocked \u2014 no billed class-C transactions in CI. The writeResource stub validates every write against the real spec schema and rejects the reserved name \"latest\", proven to bite by mutation: changing toKeyResource's bucketIds to a joined string took the suite from 27 passed to 19 passed / 8 failed with the schema-rejection message. Live-verified against real Backblaze B2 on 2026-08-05, not only mocked. A real scan drained 24 buckets and 23 keys."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "scan is read-only and safe to re-run. Page-cap exhaustion sets truncated, so an incomplete inventory is never presented as complete \u2014 the b2-hygiene report depends on that flag being honest."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Built against the v4 nested apiInfo.storageApi shape, with the authorize guard validating apiUrl, downloadUrl and s3ApiUrl before any is dereferenced. Live-verified against real Backblaze B2 on 2026-08-05, not only mocked. A real authorize and list round-trip returned the modelled shape exactly."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Three specs (bucket, key, account), all lifetime infinite with garbageCollection 20, appropriate for inventory records used for drift comparison."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Audited before the repository was made public: every identifier in code, tests and docs is a fixture. All 74 real identifiers extracted from a live account scan were cross-checked against every blob in git history with zero matches. Real scan output lives under .swamp/, which is gitignored with no tracked files. Smoke-test model instances take their targets through env references so no real bucket name or key ID is committed."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Permissive on read by design: bucketInfo is Record<string, unknown> and the nested config blobs are z.unknown(), because a structural type would make a live scan hard-fail on the first bucket with an unusual value. Confirmed correct by the live scan, which completed over all 24 buckets."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "All three specs are lifetime infinite, garbageCollection 20."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "Deliberately read-only: this is the inventory root, and mutation belongs to b2-bucket and b2-key. No CRUD gap, by design."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "issue",
+      "note": "Carried forward and still true. The credentials-present check (labels: [policy]) can never auto-fire, because swamp auto-runs checks only before methods named create/update/delete/action and this model exposes only scan. It is reachable by explicit invocation. Deliberate \u2014 renaming scan to fit that vocabulary would make the API lie \u2014 and documented in the README rather than hidden. Recorded as an issue, not laundered to pass, because an operator reading \"has a policy check\" would otherwise assume it gates something."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Every spec is prefixed (bucket-, key-, account-) because scan writes three specs in one execution whose natural keys share one namespace, and a B2 bucket may legally be named exactly an account ID or key ID. A bucket named \"latest\" falls back to its bucket ID. Tested."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "Snapshots are per-object and keyed by real B2 identifiers, so CEL can address one bucket or key directly. The unmodelled config blobs are the accepted cost of read-safety and cannot be introspected by CEL."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "Unchanged at 2026.08.05.1 this cycle. The published archive matches this source."
+    }
+  ]
+}

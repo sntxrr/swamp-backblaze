@@ -1,0 +1,82 @@
+{
+  "extension": "@sntxrr/b2-bucket",
+  "version": "2026.08.05.2",
+  "reviewedAt": "2026-08-05T22:20:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "applicationKey is .meta({ sensitive: true }) and wired from a vault or an env reference; the 24h authorizationToken is a bearer credential that is never logged and never written into a resource. A test executes every method and asserts no snapshot and no log line contains either value. Notification rules add two secret surfaces \u2014 hmacSha256SigningSecret and arbitrary custom header values \u2014 and redactNotificationRule strips both before any snapshot."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Every method logs entry and completion with structured placeholders \u2014 logger.info(\"...{field}\", { field }) \u2014 and no logger call uses a template literal. Completion lines carry enough to distinguish outcomes."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "b2Fetch attaches status and B2 code to the thrown error rather than collapsing to a string, retries only 429/503/500 with bounded backoff honoring Retry-After, and re-authorizes exactly once on 401 expired_auth_token. A 401 from a missing capability is explicitly not transient and is never retried."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "58 tests, all mocked. The harness validates every write against the real spec schema and rejects the reserved name \"latest\". Fixes are proven by execution in both directions: reverting only the delete-tombstone call site \u2014 the half-fix that slipped through twice in this suite \u2014 fails the suite. Live-verified against real Backblaze B2 on 2026-08-05, not only mocked. A live sync of a real bucket confirmed the derived fields, including replicationConfigured: false (the field that once wrongly reported 24/24 configured) and the new defaultRetentionPeriod."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "delete is idempotent on both documented already-gone signals and still writes an exists=false tombstone plus a notificationRules tombstone, so infinite-lifetime webhook rules cannot outlive their bucket. update sends only supplied fields, so it cannot silently flip an allPublic bucket private."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Built against the v4 nested apiInfo.storageApi shape, with the authorize guard validating apiUrl, downloadUrl and s3ApiUrl before any is dereferenced. Live-verified against real Backblaze B2 on 2026-08-05, not only mocked. A real authorize and list round-trip returned the modelled shape exactly."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Mechanical field-coverage run by execution against live code: spec bucket 19/19 fields across 4 writes, spec notificationRules 5/5 across 3 writes, 1:1 both ways. Script committed at reviews/mechanical-verification.ts."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Audited before the repository was made public: every identifier in code, tests and docs is a fixture. All 74 real identifiers extracted from a live account scan were cross-checked against every blob in git history with zero matches. Real scan output lives under .swamp/, which is gitignored with no tracked files. Smoke-test model instances take their targets through env references so no real bucket name or key ID is committed."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Deliberately asymmetric and now tested to stay so: strict on what is SENT (globalArgs.bucketInfo is Record<string,string> because B2 requires it; lifecycle and notification rule inputs are fully structured), permissive on what is READ BACK, so one unexpected value cannot make a whole snapshot unwritable and cost all visibility into the bucket."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Both specs lifetime infinite, garbageCollection 50. Infinite is required: the policy check reads a prior snapshot to decide whether a bucket already prunes, so an expiring record would silently weaken that gate."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "sync, create, update, delete, get_notification_rules, set_notification_rules. Drift detection works because sync reads full state including derived verdicts; update supports optimistic concurrency via ifRevisionIs."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "lifecycle-hidden-version-retention is labelled policy and scoped appliesTo create/update, matching swamp's auto-run vocabulary, so it genuinely fires. It reads a prior snapshot as evidence when nothing is declared and is waivable explicitly. set_notification_rules records in its own description that checks do NOT auto-run for it."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Enumerated by execution across all six methods: the two specs never share an instance name. A bucket named exactly \"latest\" is aliased to bucket-latest, since latest is a reserved swamp data name rejected at write time only and is a legal 6-character B2 name."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "Snapshots expose derived verdicts CEL can read directly: prunesHiddenVersions, minDaysFromHidingToDeleting, unprunedPrefixes, defaultRetentionPeriod. A live scan exposed that unprunedPrefixes reported [] for a bucket with NO lifecycle rules \u2014 reading as \"nothing accumulates\" when every file does, and hiding exactly the buckets a consumer queries for. Fixed to [\"\"], and the pre-existing unit test that had encoded the wrong value was corrected."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "pass",
+      "note": "2026.08.05.1 -> .2. Two snapshot-visible changes: unprunedPrefixes now reports [\"\"] instead of [] for a bucket with no lifecycle rules (a correction \u2014 the old value inverted the meaning), and defaultRetentionPeriod is a new field. Both are additive or corrective for readers; no input contract changed."
+    }
+  ]
+}

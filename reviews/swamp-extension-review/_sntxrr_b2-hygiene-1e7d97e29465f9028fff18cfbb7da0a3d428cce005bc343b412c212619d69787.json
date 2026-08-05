@@ -1,0 +1,47 @@
+{
+  "extension": "@sntxrr/b2-hygiene",
+  "version": "2026.08.05.1",
+  "reviewedAt": "2026-08-05T22:20:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Handles no credentials at all. It reads resource snapshots the scan already wrote and never authenticates to anything, so there is nothing to leak. The snapshots it reads are themselves asserted secret-free by b2-account's own tests."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "One structured completion line reporting finding and object counts. No secret or B2 identifier is logged beyond what already exists in the snapshot."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "An unreadable or unparseable snapshot is skipped rather than counted, and a test asserts an unreadable bucket does not appear as a clean object \u2014 silently counting it would inflate the audited population and understate risk. The report also declines to run against a non-scan method or a failed scan rather than auditing a partial inventory."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "issue",
+      "note": "22 tests covering every finding code, the severity ordering, both honesty rules, and the execute() wiring against a stubbed data repository. The gap is that it has never run against live data: the fixtures are hand-written, so the report is mock-verified only, exactly the status b2-bucket and b2-key were in before today. Running the b2-fleet-audit workflow against the real account would close it, and would independently confirm whether the 0-of-24-lifecycle-rules finding still holds."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Pure analysis over immutable snapshots: running it repeatedly produces the same output and mutates nothing. Safe to schedule."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "na",
+      "note": "Makes no external HTTP calls. Its only contract is with the resource shapes b2-account writes, and it reads those defensively \u2014 bucketIds and capabilities are coerced with Array.isArray, so it tolerates both the pre-.2 null encoding and the current array."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Writes no resources; a report returns markdown and json. It reads via dataHandles filtered by specName, so it cannot accidentally consume a spec it does not understand."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Audited before the repository was made public: every identifier in code, tests and docs is a fixture. All 74 real identifiers extracted from a live account scan were cross-checked against every blob in git history with zero matches. Real scan output lives under .swamp/, which is gitignored with no tracked files. Smoke-test model instances take their targets through env references so no real bucket name or key ID is committed. The report's own fixtures use synthetic bucket and key identifiers, and the README's example finding names a fictional bucket."
+    }
+  ]
+}

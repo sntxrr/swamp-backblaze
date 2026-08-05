@@ -1,0 +1,82 @@
+{
+  "extension": "@sntxrr/b2-key",
+  "version": "2026.08.05.2",
+  "reviewedAt": "2026-08-05T22:20:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "The strongest constraint in the suite: B2 returns the applicationKey secret exactly once, so create delivers it straight to 1Password Connect and the key resource schema has no field capable of holding it. create fails closed when no destination is configured \u2014 a key nobody can capture must be revoked, not orphaned \u2014 and the secret is never logged as a fallback. connectToken is sensitive. Tests assert the secret never reaches a snapshot and that the Connect PUT re-sends the full pre-existing field set rather than destructively replacing an item."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Every method logs entry and completion with structured placeholders \u2014 logger.info(\"...{field}\", { field }) \u2014 and no logger call uses a template literal. Completion lines carry enough to distinguish outcomes."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "b2Fetch attaches status and B2 code to the thrown error rather than collapsing to a string, retries only 429/503/500 with bounded backoff honoring Retry-After, and re-authorizes exactly once on 401 expired_auth_token. A 401 from a missing capability is explicitly not transient and is never retried."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "41 tests, all mocked. The harness validates writes against the real spec schema, proven to bite by mutation: coercing secretDelivered to a string took the suite from 39 passed to 26 passed / 13 failed with the schema-rejection message. Live-verified against real Backblaze B2 on 2026-08-05, not only mocked. A live sync of a real account-wide key confirmed the metadata path and exposed the bucketIds encoding bug fixed in this version."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "delete is idempotent and verifies the key exists via b2_list_keys first, because B2 documents no key-not-found error for b2_delete_key \u2014 treating a generic 400 bad_request as already-gone would swallow real request bugs. It refuses to claim absence when the listing was truncated. create refuses a name clash by default, since B2 key names are not identifiers and a duplicate would leave the first key live and unreachable."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Built against the v4 nested apiInfo.storageApi shape, with the authorize guard validating apiUrl, downloadUrl and s3ApiUrl before any is dereferenced. Live-verified against real Backblaze B2 on 2026-08-05, not only mocked. A real authorize and list round-trip returned the modelled shape exactly."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "One spec, lifetime infinite, garbageCollection 20. Metadata only, by design."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Audited before the repository was made public: every identifier in code, tests and docs is a fixture. All 74 real identifiers extracted from a live account scan were cross-checked against every blob in git history with zero matches. Real scan output lives under .swamp/, which is gitignored with no tracked files. Smoke-test model instances take their targets through env references so no real bucket name or key ID is committed."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "bucketIds is now a plain array rather than nullable: b2_list_keys has no \"unknown\" case, so an omitted field means account-wide and is recorded as []. This removes a null-handling trap and, more importantly, ends a disagreement with b2-account, which already encoded the same B2 field as an array \u2014 two models describing one key must not describe it differently."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Single spec, lifetime infinite, garbageCollection 20."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "sync, create, delete. No update method, deliberately: B2 application keys are immutable \u2014 changing scope means minting a new key and revoking the old one, which is a workflow spanning two objects, not a model method."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "secret-destination-configured is labelled policy and scoped to create, which matches swamp's auto-run vocabulary, so it fires before the one method that can mint an uncapturable credential."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "One spec keyed by the real applicationKeyId, which is opaque and cannot collide with the reserved name \"latest\". The harness rejects that name regardless."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "Snapshots carry capabilities, bucketIds, expirationTimestamp and delivery status, which is what an audit needs to judge blast radius. With bucketIds always an array, bucketIds.length == 0 is a safe CEL test for account-wide across both this model and b2-account."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "issue",
+      "note": "2026.08.05.1 -> .2, and this one is snapshot-breaking for readers, so it is recorded as an issue rather than waved through. bucketIds changes from array-or-null to always-array: an account-wide key that previously snapshotted null now snapshots []. Any consumer branching on `bucketIds == null` to mean account-wide must move to `bucketIds.length == 0`. The old encoding was the defect \u2014 it disagreed with b2-account about the same field and made the natural length test throw \u2014 but a consumer written against .1 will silently stop detecting account-wide keys, which is a security-relevant regression in the reader rather than in this model. Called out in the README."
+    }
+  ]
+}

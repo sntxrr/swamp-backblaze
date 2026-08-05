@@ -433,8 +433,9 @@ const KeySchema = z.object({
   capabilities: z.array(z.string()).nullable().describe(
     "Capabilities granted to the key.",
   ),
-  bucketIds: z.array(z.string()).nullable().describe(
-    "Buckets the key is restricted to, or null when unrestricted (v4 plural).",
+  bucketIds: z.array(z.string()).describe(
+    "Buckets the key is restricted to (v4 plural). EMPTY means account-wide, " +
+      "not unknown — b2_list_keys omits the field for an unrestricted key.",
   ),
   namePrefix: z.string().nullable().describe(
     "File-name prefix the key is restricted to, or null.",
@@ -747,6 +748,29 @@ type RawKey = Record<string, unknown>;
  * that carries the secret (which `b2_create_key` does) cannot leak it into a
  * snapshot. The mapper is the single choke point for this guarantee.
  */
+/**
+ * Normalize a raw key's bucket restriction to an array.
+ *
+ * Mirrors `b2-account`, so both models describe the same key identically.
+ * B2 omits `bucketIds` entirely for an unrestricted key, and `b2_list_keys` has
+ * no "unknown" case — absent means account-wide. Encoding that as `null` forced
+ * every consumer to handle two shapes for one fact, and made
+ * `bucketIds.length === 0` (the natural test for account-wide) throw.
+ *
+ * v4 removed the scalar `bucketId`, but a stale or proxied response carrying it
+ * is degraded to a one-element array rather than dropped: silently reporting a
+ * bucket-scoped key as account-wide would misstate its blast radius.
+ */
+export function normalizeBucketIds(k: RawKey): string[] {
+  const plural = (k as Record<string, unknown>).bucketIds;
+  if (Array.isArray(plural)) return plural as string[];
+  const legacySingular = (k as Record<string, unknown>).bucketId;
+  if (typeof legacySingular === "string" && legacySingular !== "") {
+    return [legacySingular];
+  }
+  return [];
+}
+
 export function toKeyResource(
   k: RawKey,
   extra: {
@@ -763,7 +787,7 @@ export function toKeyResource(
       "",
     keyName: (k.keyName as string) ?? null,
     capabilities: (k.capabilities as string[]) ?? null,
-    bucketIds: (k.bucketIds as string[]) ?? null,
+    bucketIds: normalizeBucketIds(k),
     namePrefix: (k.namePrefix as string) ?? null,
     expirationTimestamp: (k.expirationTimestamp as number) ?? null,
     options: (k.options as string[]) ?? null,
@@ -862,7 +886,7 @@ export const model = {
   type: "@sntxrr/b2/key",
   description:
     "Manage a Backblaze B2 application key via the Native API v4 — sync, create (with the one-shot secret delivered to 1Password Connect), and idempotent delete",
-  version: "2026.08.05.1",
+  version: "2026.08.05.2",
   globalArguments: GlobalArgsSchema,
   resources: {
     "key": {

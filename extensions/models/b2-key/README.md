@@ -152,6 +152,14 @@ swamp model get restic-example --json | jq -r '.resources.key | keys[]'
 | `capabilities`           | yes      | Capability strings granted to the new key                                  |
 | `bucketIds`              | no       | **Plural** v4 multi-bucket restriction                                     |
 | `namePrefix`             | no       | File-name prefix restriction; applies across all buckets unless `bucketIds` is also set |
+
+**`bucketIds` is always an array in a snapshot, and empty means account-wide.**
+B2 omits the field entirely for an unrestricted key; that is recorded as `[]`,
+not `null`, so `bucketIds.length === 0` is a safe test for "this key reaches
+every bucket" — and it matches how `@sntxrr/b2/account` records the same field.
+A stale response carrying v2's scalar `bucketId` degrades to a one-element
+array rather than being dropped, since reporting a scoped key as account-wide
+would misstate its blast radius.
 | `validDurationInSeconds` | no       | Expire after N seconds (B2 max `86400000`, ~1000 days)                     |
 | `itemTitle`              | no       | Per-run override of `connectItemTitle`                                     |
 | `allowDuplicateName`     | no       | Mint even when a key of that name exists (default `false` — see below)     |
