@@ -1,0 +1,10 @@
+type: '@sntxrr/b2/account'
+typeVersion: 2026.08.05.1
+id: 86f0de17-9208-4427-b0bd-eb2dcc462745
+name: b2-smoke
+version: 1
+tags: {}
+globalArguments:
+  applicationKeyId: ${{ env.B2_APPLICATION_KEY_ID }}
+  applicationKey: ${{ env.B2_APPLICATION_KEY }}
+methods: {}

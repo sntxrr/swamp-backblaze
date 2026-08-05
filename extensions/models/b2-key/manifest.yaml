@@ -1,0 +1,24 @@
+manifestVersion: 1
+
+name: "@sntxrr/b2-key"
+version: "2026.08.05.1"
+description: "Manage a Backblaze B2 application key via the Native API v4 — sync, create, and idempotent delete. The one-shot applicationKey secret is delivered straight to 1Password Connect and never written to a resource snapshot; create fails closed when no destination is configured."
+repository: "https://github.com/sntxrr/swamp-backblaze"
+
+paths:
+  base: manifest
+
+models:
+  - b2_key.ts
+
+additionalFiles:
+  - README.md
+  - LICENSE.md
+
+labels:
+  - backblaze
+  - b2
+  - storage
+  - security
+  - credentials
+  - 1password
