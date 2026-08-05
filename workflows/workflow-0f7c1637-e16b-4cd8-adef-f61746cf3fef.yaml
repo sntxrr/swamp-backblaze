@@ -1,0 +1,39 @@
+id: 0f7c1637-e16b-4cd8-adef-f61746cf3fef
+name: b2-fleet-audit
+description: >-
+  Read-only Backblaze B2 fleet audit. Inventories every bucket and application
+  key in the account, then lets the @sntxrr/b2/hygiene report turn that
+  inventory into findings: buckets with no hidden-version retention rule (the
+  cost leak behind restic forget --prune), account-wide or orphaned application
+  keys, and public buckets. Mutates nothing and is safe to schedule.
+tags:
+  kind: audit
+  readOnly: "true"
+jobs:
+  - name: audit
+    description: >-
+      Inventory the account. This is deliberately a single step today: the
+      analysis lives in the b2-hygiene report, which runs after the scan and
+      owns the truncation-honesty guard. Wave 2 adds a second step here — a
+      per-bucket b2-files aggregate — which is what finally sizes the
+      hidden-version debt this audit can currently only point at.
+    steps:
+      - name: scan-account
+        description: >-
+          One read-only b2-account scan. Emits a resource per bucket and per
+          application key plus an account summary. Every B2 list call is a
+          class-C transaction, so this is a single unpaginated pass over buckets
+          and a page-capped drain over keys.
+        task:
+          type: model_method
+          modelIdOrName: b2-audit
+          methodName: scan
+        dependsOn: []
+        weight: 0
+        # Never set this true. A failed scan must fail the audit: a partial
+        # inventory reporting no findings is indistinguishable from a clean
+        # account, and that is the one output this must never produce.
+        allowFailure: false
+    dependsOn: []
+    weight: 0
+version: 1

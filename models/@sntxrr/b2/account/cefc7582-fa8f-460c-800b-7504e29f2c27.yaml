@@ -1,0 +1,10 @@
+type: '@sntxrr/b2/account'
+typeVersion: 2026.08.05.1
+id: cefc7582-fa8f-460c-800b-7504e29f2c27
+name: b2-audit
+version: 1
+tags: {}
+globalArguments:
+  applicationKeyId: '${{ env.B2_APPLICATION_KEY_ID }}'
+  applicationKey: '${{ env.B2_APPLICATION_KEY }}'
+methods: {}

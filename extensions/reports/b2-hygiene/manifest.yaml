@@ -1,0 +1,24 @@
+manifestVersion: 1
+
+name: "@sntxrr/b2-hygiene"
+version: "2026.08.05.1"
+description: "Audit a scanned Backblaze B2 account for hidden-version retention gaps, over-scoped or orphaned application keys, and public buckets. Read-only — it analyses the resources b2-account's scan already wrote and never calls B2."
+repository: "https://github.com/sntxrr/swamp-backblaze"
+
+paths:
+  base: manifest
+
+reports:
+  - b2_hygiene.ts
+
+additionalFiles:
+  - README.md
+  - LICENSE.md
+
+labels:
+  - backblaze
+  - b2
+  - audit
+  - security
+  - cost
+  - restic
