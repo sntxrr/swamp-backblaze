@@ -5,6 +5,9 @@ name: b2-audit
 version: 1
 tags: {}
 globalArguments:
-  applicationKeyId: '${{ env.B2_APPLICATION_KEY_ID }}'
-  applicationKey: '${{ env.B2_APPLICATION_KEY }}'
+  applicationKeyId: '${{ vault.get(onepassword, "Backblaze/backblaze-primary-key") }}'
+  applicationKey: '${{ vault.get(onepassword, "Backblaze/backblaze-primary-application-key") }}'
 methods: {}
+reports:
+  require:
+    - '@sntxrr/b2/hygiene'

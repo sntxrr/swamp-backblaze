@@ -1,0 +1,16 @@
+{
+  "@sntxrr/1password-connect": {
+    "version": "2026.08.05.1",
+    "pulledAt": "2026-08-05T23:13:48.225Z",
+    "files": [
+      ".swamp/pulled-extensions/@sntxrr/1password-connect/vaults/mod.ts",
+      ".swamp/vault-bundles/662fadc1/mod.js",
+      ".swamp/pulled-extensions/@sntxrr/1password-connect/files/LICENSE.md",
+      ".swamp/pulled-extensions/@sntxrr/1password-connect/files/README.md",
+      ".swamp/pulled-extensions/@sntxrr/1password-connect/manifest.yaml"
+    ],
+    "checksum": "4e5f6eb6e07e7890e13c3ef256d6886cfc2906e2ded16495ba9f804dd22afa85",
+    "filesChecksum": "917031348396df3b0c5b9cf6f8cf65465060964a6acb110bedf93d18249b1552",
+    "serverUrl": "https://swamp-club.com"
+  }
+}

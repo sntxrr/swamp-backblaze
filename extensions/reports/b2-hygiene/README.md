@@ -58,8 +58,21 @@ authoritative while describing only whatever happened to be written first.
 
 ## Usage
 
+**You must attach it to the model definition first.** Reports are attached to
+model *types*, and this is a standalone report extension rather than one
+declared inline on `@sntxrr/b2/account`, so installing it is not enough — it
+registers as a type but never executes, and `swamp report get` then reports
+"Report not found" with no indication why. Add it to the definition:
+
+```yaml
+# models/@sntxrr/b2/account/<uuid>.yaml
+reports:
+  require:
+    - '@sntxrr/b2/hygiene'
+```
+
 ```bash
-# Runs automatically after a scan when selected on the model definition.
+# Then it runs automatically after every scan.
 swamp model method run <b2-account-model> scan
 
 # Or inspect the most recent result directly.
