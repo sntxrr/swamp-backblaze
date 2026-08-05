@@ -583,6 +583,12 @@ const GlobalArgsSchema = z.object({
   replicationConfiguration: ReplicationConfigurationSchema.optional().describe(
     "Desired Cloud Replication configuration, passed through to B2 unmodified.",
   ),
+  allowPublicBucket: z.boolean().default(false).describe(
+    "Acknowledge that this bucket may be allPublic. Without it, create and " +
+      "update refuse to set bucketType=allPublic. A backup repository must " +
+      "never be public, and B2 makes the flip a one-liner that exposes every " +
+      "object the moment it lands.",
+  ),
   allowUnprunedHiddenVersions: z.boolean().default(false).describe(
     "Set true to acknowledge that this bucket intentionally retains hidden file versions forever, which disables the lifecycle-hidden-version-retention pre-flight check.",
   ),
@@ -899,6 +905,30 @@ export function redactNotificationRule(
 }
 
 /**
+ * Refuse to make a bucket public unless it was explicitly acknowledged.
+ *
+ * This lives in the METHOD, not only in a pre-flight check, and that is
+ * deliberate. swamp gives checks the model's global arguments but never the
+ * method's inputs, so a check cannot see `--input bucketType=allPublic` — which
+ * is precisely the invocation that exposes a bucket. A check alone would pass
+ * the one case it exists to stop. The sibling `bucket-visibility` check catches
+ * the globalArgs path early, before any B2 call; this is what enforces.
+ */
+export function assertPublicBucketAllowed(
+  desiredBucketType: string | undefined,
+  g: { bucketName: string; allowPublicBucket?: boolean },
+): void {
+  if (desiredBucketType !== "allPublic") return;
+  if (g.allowPublicBucket) return;
+  throw new Error(
+    `Refusing to set bucket "${g.bucketName}" to allPublic: everything in it ` +
+      `becomes readable by anyone who learns the bucket name, and a restic ` +
+      `repository must never be public. If this bucket genuinely should be ` +
+      `public, set allowPublicBucket=true on the model to acknowledge it.`,
+  );
+}
+
+/**
  * Instance name for a `notificationRules` snapshot.
  *
  * Instance names map straight onto storage paths and must be unique across
@@ -1099,7 +1129,11 @@ export const model = {
         const payload: Record<string, unknown> = {
           accountId: auth.accountId,
           bucketName: g.bucketName,
-          bucketType: pick(args.bucketType, g.bucketType) ?? "allPrivate",
+          bucketType: (() => {
+            const t = pick(args.bucketType, g.bucketType) ?? "allPrivate";
+            assertPublicBucketAllowed(t, g);
+            return t;
+          })(),
         };
         const lifecycleRules = pick(args.lifecycleRules, g.lifecycleRules);
         if (lifecycleRules !== undefined) {
@@ -1170,7 +1204,10 @@ export const model = {
           bucketId,
         };
         const bucketType = pick(args.bucketType, g.bucketType);
-        if (bucketType !== undefined) payload.bucketType = bucketType;
+        if (bucketType !== undefined) {
+          assertPublicBucketAllowed(bucketType, g);
+          payload.bucketType = bucketType;
+        }
         const lifecycleRules = pick(args.lifecycleRules, g.lifecycleRules);
         if (lifecycleRules !== undefined) {
           payload.lifecycleRules = lifecycleRules;
@@ -1412,6 +1449,27 @@ export const model = {
     },
   },
   checks: {
+    "bucket-visibility": {
+      description:
+        "Refuse to create or update a bucket as allPublic unless allowPublicBucket=true acknowledges it. A restic repository must never be public. NOTE: this catches the global-argument path only — swamp does not give checks the method's inputs, so `--input bucketType=allPublic` is invisible here and is blocked inside create/update instead.",
+      labels: ["policy"],
+      appliesTo: ["create", "update"],
+      // deno-lint-ignore require-await
+      execute: async (
+        context: { globalArgs: GlobalArgs },
+      ): Promise<{ pass: boolean; errors?: string[] }> => {
+        const g = context.globalArgs;
+        if (g.bucketType !== "allPublic" || g.allowPublicBucket) {
+          return { pass: true };
+        }
+        return {
+          pass: false,
+          errors: [
+            `Bucket "${g.bucketName}" is declared allPublic, which makes every object in it readable by anyone who learns the bucket name. A restic repository must never be public. Set allowPublicBucket=true to acknowledge this deliberately, or change bucketType to allPrivate.`,
+          ],
+        };
+      },
+    },
     "lifecycle-hidden-version-retention": {
       description:
         "Refuse to create or update a bucket that would be left with no lifecycle rule setting daysFromHidingToDeleting. B2 keeps every hidden file version forever without one, so a restic bucket silently accumulates — and is billed for — the pack files restic already pruned. Acknowledge the exception with globalArgs.allowUnprunedHiddenVersions=true or --skip-check lifecycle-hidden-version-retention.",
@@ -1514,6 +1572,7 @@ export const _internal = {
   toNotificationRulesResource,
   notificationRulesInstanceName,
   bucketInstanceName,
+  assertPublicBucketAllowed,
   redactNotificationRule,
   findBucket,
   isAlreadyGone,

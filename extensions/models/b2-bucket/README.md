@@ -77,6 +77,33 @@ Notes that will otherwise cost you an afternoon:
 - **Each method writes a snapshot keyed by the real bucket name**, never the
   reserved data name `latest`.
 
+### Pre-flight check: `bucket-visibility`
+
+Label: `policy`. Scope: `appliesTo: ["create", "update"]`.
+
+`create` and `update` refuse to set `bucketType=allPublic` unless
+`allowPublicBucket=true`. Everything in a public bucket is readable by anyone who
+learns its name, and B2 makes the flip a one-liner that takes effect immediately.
+
+```bash
+# Refused
+swamp model method run my-bucket update --input bucketType=allPublic
+
+# Allowed, deliberately
+swamp model method run my-bucket update \
+  --input bucketType=allPublic --global-arg allowPublicBucket=true
+```
+
+> **The real enforcement is in the methods, not in this check.** swamp gives a
+> pre-flight check the model's global arguments but never the method's inputs,
+> so this check cannot see `--input bucketType=allPublic` — the exact invocation
+> that exposes a bucket. It catches the global-argument path early, before any
+> B2 call; `create` and `update` block the input path themselves. A guard that
+> lived only in the check would pass the one case it exists to stop, which is
+> worse than no guard, because it reads as coverage.
+
+Going the other way, `allPublic` → `allPrivate`, is never gated.
+
 ### Pre-flight check: `lifecycle-hidden-version-retention`
 
 Label: `policy`. Scope: `appliesTo: ["create", "update"]`.

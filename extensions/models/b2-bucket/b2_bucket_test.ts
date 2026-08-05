@@ -20,6 +20,7 @@ import {
   assertFalse,
   assertRejects,
   assertStringIncludes,
+  assertThrows,
 } from "jsr:@std/assert@1";
 import { z } from "npm:zod@4";
 import {
@@ -1737,4 +1738,96 @@ Deno.test("the retention check explains that a method input cannot satisfy it", 
   );
   // And it must not claim the method ignores the input — it does not.
   assertStringIncludes(msg, "method itself still honours the input");
+});
+
+Deno.test("making a bucket public requires an explicit acknowledgement", () => {
+  const g = { bucketName: "example-backup-bucket", allowPublicBucket: false };
+  assertThrows(
+    () => _internal.assertPublicBucketAllowed("allPublic", g),
+    Error,
+    "Refusing to set bucket",
+  );
+  // allPrivate is never gated, and the waiver lets a genuine public bucket through.
+  _internal.assertPublicBucketAllowed("allPrivate", g);
+  _internal.assertPublicBucketAllowed(undefined, g);
+  _internal.assertPublicBucketAllowed("allPublic", {
+    ...g,
+    allowPublicBucket: true,
+  });
+});
+
+Deno.test("update --input bucketType=allPublic is blocked, though no check can see it", async () => {
+  // This is the case the pre-flight check CANNOT catch: swamp gives checks the
+  // global arguments and never the method's inputs. A guard that lived only in
+  // the check would pass the single most dangerous invocation this model has,
+  // so the enforcement sits inside update itself.
+  const f = installFetch((_req, i) =>
+    i === 0 ? json(authBody()) : json(bucketBody())
+  );
+  const { context, written } = makeContext(baseGlobalArgs({ bucketId: BUCKET_ID }));
+  try {
+    await assertRejects(
+      () => model.methods.update.execute({ bucketType: "allPublic" }, context),
+      Error,
+      "Refusing to set bucket",
+    );
+    // And it must be refused BEFORE any bucket-mutating call is issued.
+    assertEquals(
+      f.calls.filter((c) => c.url.includes("b2_update_bucket")).length,
+      0,
+      "no update may reach B2 when the guard refuses",
+    );
+    assertEquals(written.length, 0, "nothing may be snapshotted either");
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("create --input bucketType=allPublic is blocked the same way", async () => {
+  const f = installFetch((_req, i) =>
+    i === 0 ? json(authBody()) : json(bucketBody())
+  );
+  const { context } = makeContext(
+    baseGlobalArgs({ lifecycleRules: RESTIC_LIFECYCLE }),
+  );
+  try {
+    await assertRejects(
+      () => model.methods.create.execute({ bucketType: "allPublic" }, context),
+      Error,
+      "Refusing to set bucket",
+    );
+    assertEquals(
+      f.calls.filter((c) => c.url.includes("b2_create_bucket")).length,
+      0,
+    );
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("the visibility check catches the global-argument path early", async () => {
+  const check = model.checks["bucket-visibility"];
+  assertEquals(check.appliesTo, ["create", "update"]);
+
+  const bad = await check.execute({
+    globalArgs: _internal.GlobalArgsSchema.parse(
+      baseGlobalArgs({ bucketType: "allPublic" }),
+    ),
+  });
+  assertFalse(bad.pass);
+  assertStringIncludes((bad.errors ?? []).join(" "), "must never be public");
+
+  const waived = await check.execute({
+    globalArgs: _internal.GlobalArgsSchema.parse(
+      baseGlobalArgs({ bucketType: "allPublic", allowPublicBucket: true }),
+    ),
+  });
+  assert(waived.pass);
+
+  const priv = await check.execute({
+    globalArgs: _internal.GlobalArgsSchema.parse(
+      baseGlobalArgs({ bucketType: "allPrivate" }),
+    ),
+  });
+  assert(priv.pass);
 });
