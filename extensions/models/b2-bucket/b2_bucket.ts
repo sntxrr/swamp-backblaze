@@ -448,8 +448,16 @@ const BucketResourceSchema = z.object({
   bucketType: z.string().nullable().describe(
     'Bucket type: "allPrivate", "allPublic", "snapshot", "restricted" or "shared".',
   ),
-  bucketInfo: z.record(z.string(), z.string()).describe(
-    "User-defined bucket metadata (empty object when unset).",
+  // Read-back is permissive for the same reason corsRules is: bucketInfo is
+  // free-form, user-supplied metadata, and nothing stops a value arriving as a
+  // number or null. Typing it Record<string,string> here makes the entire
+  // snapshot unwritable over one odd value — losing all observability of the
+  // bucket most worth looking at. `globalArgs.bucketInfo`, which is what this
+  // model SENDS, stays strictly Record<string,string> because B2 requires that.
+  // The sibling b2-account model already types this same B2 field this way.
+  bucketInfo: z.record(z.string(), z.unknown()).describe(
+    "User-defined bucket metadata (empty object when unset). Read back " +
+      "unmodelled — B2 documents string values but this is user-controlled.",
   ),
   // Deliberately unstructured per CONVENTIONS §4.9: no bucket in any account
   // scanned so far has a CORS rule, so the element shape is unobserved. Typing
@@ -476,6 +484,18 @@ const BucketResourceSchema = z.object({
   ),
   defaultRetentionMode: z.string().nullable().describe(
     'Default Object Lock retention mode ("governance"/"compliance"), or null.',
+  ),
+  // Read back permissively (duration a number, unit a bare string) rather than
+  // reusing the strict send-side DefaultRetentionSchema: a unit B2 adds later
+  // must not make the whole snapshot unwritable. Without this field a snapshot
+  // could not distinguish a 1-day immutability window from a 10-year one, and
+  // `sync` could not verify a period this very model had just set.
+  defaultRetentionPeriod: z.object({
+    duration: z.number().describe("Retention duration."),
+    unit: z.string().describe('Unit for `duration` ("days"/"years").'),
+  }).nullable().describe(
+    "Default Object Lock retention period, or null when no default retention " +
+      "is set or the key may not read the lock configuration.",
   ),
   defaultServerSideEncryptionMode: z.string().nullable().describe(
     'Default server-side encryption mode ("SSE-B2"/"none"), or null when the key may not read it.',
@@ -638,14 +658,17 @@ type B2Bucket = {
   bucketId?: string;
   bucketName?: string;
   bucketType?: string;
-  bucketInfo?: Record<string, string> | null;
+  bucketInfo?: Record<string, unknown> | null;
   corsRules?: unknown[] | null;
   lifecycleRules?: unknown[] | null;
   fileLockConfiguration?: {
     isClientAuthorizedToRead?: boolean;
     value?: {
       isFileLockEnabled?: boolean | null;
-      defaultRetention?: { mode?: string | null } | null;
+      defaultRetention?: {
+        mode?: string | null;
+        period?: { duration?: number | null; unit?: string | null } | null;
+      } | null;
     } | null;
   } | null;
   defaultServerSideEncryption?: {
@@ -729,6 +752,22 @@ export function parseLifecycleRules(raw: unknown): LifecycleRule[] {
   });
 }
 
+/**
+ * Normalize the Object Lock `defaultRetention.period` B2 reports.
+ *
+ * Returns null unless both halves are present and well-formed: a half-read
+ * period ("7" with no unit) is worse than no answer, because it reads as a
+ * concrete immutability window that nothing verified.
+ */
+function toRetentionPeriod(
+  period: { duration?: number | null; unit?: string | null } | null | undefined,
+): { duration: number; unit: string } | null {
+  if (!period) return null;
+  const { duration, unit } = period;
+  if (typeof duration !== "number" || typeof unit !== "string") return null;
+  return { duration, unit };
+}
+
 // ---------------------------------------------------------------------------
 // Mapping
 // ---------------------------------------------------------------------------
@@ -758,6 +797,7 @@ export function toBucketResource(
       unprunedPrefixes: [],
       fileLockEnabled: null,
       defaultRetentionMode: null,
+      defaultRetentionPeriod: null,
       defaultServerSideEncryptionMode: null,
       replicationConfigured: false,
       revision: null,
@@ -797,12 +837,19 @@ export function toBucketResource(
       ? lock.isFileLockEnabled
       : null,
     defaultRetentionMode: lock?.defaultRetention?.mode ?? null,
+    defaultRetentionPeriod: toRetentionPeriod(lock?.defaultRetention?.period),
     defaultServerSideEncryptionMode: sse?.mode ?? null,
     replicationConfigured: replicationReadable
       ? replication !== null && Object.keys(replication).length > 0
       : null,
     revision: typeof bucket.revision === "number" ? bucket.revision : null,
-    options: Array.isArray(bucket.options) ? bucket.options : [],
+    // Coerced rather than passed through: `options` stays a string array for
+    // consumers, but one non-string element must not sink the whole snapshot.
+    // Coercing keeps the element count honest where filtering would understate
+    // what B2 reported.
+    options: Array.isArray(bucket.options)
+      ? bucket.options.map((o) => typeof o === "string" ? o : String(o))
+      : [],
     exists: true,
     observedAt,
   };

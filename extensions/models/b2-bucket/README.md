@@ -156,6 +156,18 @@ global argument to skip the lookup on `update`/`delete`/notification methods.
 > datastore this repo is configured with — potentially a remote bucket. It is
 > arbitrary user-controlled metadata, so never put a credential, token, or any
 > other secret in it.
+>
+> Values you *send* must be strings, because B2 requires that. Values *read
+> back* are accepted whatever their type: one odd value must not make the whole
+> snapshot unwritable and cost you all visibility into the bucket.
+
+> **Object Lock is recorded as both mode and period.** `defaultRetentionMode`
+> alone cannot tell a 1-day immutability window from a 10-year one, so
+> `defaultRetentionPeriod` carries `{ duration, unit }`. It is `null` when no
+> default retention is set, when the key may not read the lock configuration,
+> or when B2 reports a period with only one of the two halves — a duration
+> without a unit is not a retention window, and reporting it as one would look
+> like a verified guarantee.
 
 > **`bucketType` has no schema-level default.** `create` uses `allPrivate` when
 > you do not set it — a restic repository must never be public. It is

@@ -1512,3 +1512,153 @@ Deno.test("every method that snapshots a bucket named 'latest' aliases the key",
     }
   }
 });
+
+Deno.test("sync survives a bucketInfo value B2 did not return as a string", async () => {
+  // bucketInfo is free-form, user-supplied metadata. Typing the read-back
+  // strictly as Record<string,string> makes the whole snapshot unwritable when
+  // one value is not a string — the same trap documented on corsRules, and the
+  // sibling b2-account model already types this exact B2 field permissively.
+  // Strict on what we SEND, permissive on what we READ.
+  const f = installFetch((_req, i) =>
+    i === 0 ? json(authBody()) : json({
+      buckets: [bucketBody({
+        bucketInfo: { owner: "restic", retentionDays: 30, archived: null },
+      })],
+    })
+  );
+  const { context, written } = makeContext(baseGlobalArgs({}));
+  try {
+    await model.methods.sync.execute({}, context);
+    const snap = written.find((w) => w.spec === "bucket");
+    assert(snap, "sync must write a bucket snapshot");
+    assertEquals(snap.data.bucketInfo, {
+      owner: "restic",
+      retentionDays: 30,
+      archived: null,
+    }, "the metadata must round-trip verbatim, not be coerced or dropped");
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("sync survives an options element B2 did not return as a string", async () => {
+  const f = installFetch((_req, i) =>
+    i === 0 ? json(authBody()) : json({
+      buckets: [bucketBody({ options: ["s3", 42] })],
+    })
+  );
+  const { context, written } = makeContext(baseGlobalArgs({}));
+  try {
+    await model.methods.sync.execute({}, context);
+    const snap = written.find((w) => w.spec === "bucket");
+    assert(snap, "sync must write a bucket snapshot");
+    // Coerced, not dropped: losing an element would understate what B2 reported.
+    assertEquals(snap.data.options, ["s3", "42"]);
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("bucketInfo is permissive on read but still strict on what we send", () => {
+  // The asymmetry is deliberate — do not "fix" the send side to match. B2
+  // requires string values on create/update, so sending an unmodelled value
+  // would fail at the API instead of at the schema, with a worse message.
+  const g = _internal.GlobalArgsSchema;
+  assertEquals(
+    g.safeParse({
+      applicationKeyId: "x",
+      applicationKey: "y",
+      bucketName: BUCKET_NAME,
+      bucketInfo: { retentionDays: 30 },
+    }).success,
+    false,
+    "globalArgs.bucketInfo must reject a non-string value",
+  );
+  assertEquals(
+    _internal.BucketResourceSchema.safeParse({
+      ..._internal.toBucketResource(BUCKET_NAME, bucketBody(), "2026-01-01T00:00:00Z"),
+      bucketInfo: { retentionDays: 30 },
+    }).success,
+    true,
+    "the resource schema must accept what B2 actually returned",
+  );
+});
+
+Deno.test("the snapshot records the Object Lock retention period, not just the mode", async () => {
+  // The model can SET defaultRetention.period but recorded only the mode, so a
+  // sync could not verify what it had just written and an audit could not tell
+  // a 1-day immutability window from a 10-year one — the difference between a
+  // usable ransomware guard and data that cannot be deleted for a decade.
+  const f = installFetch((_req, i) =>
+    i === 0 ? json(authBody()) : json({
+      buckets: [bucketBody({
+        fileLockConfiguration: {
+          isClientAuthorizedToRead: true,
+          value: {
+            isFileLockEnabled: true,
+            defaultRetention: {
+              mode: "governance",
+              period: { duration: 7, unit: "days" },
+            },
+          },
+        },
+      })],
+    })
+  );
+  const { context, written } = makeContext(baseGlobalArgs({}));
+  try {
+    await model.methods.sync.execute({}, context);
+    const snap = written.find((w) => w.spec === "bucket");
+    assert(snap, "sync must write a bucket snapshot");
+    assertEquals(snap.data.fileLockEnabled, true);
+    assertEquals(snap.data.defaultRetentionMode, "governance");
+    assertEquals(snap.data.defaultRetentionPeriod, {
+      duration: 7,
+      unit: "days",
+    });
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("a bucket with no default retention records a null period, not a missing field", async () => {
+  const f = installFetch((_req, i) =>
+    i === 0 ? json(authBody()) : json({ buckets: [bucketBody()] })
+  );
+  const { context, written } = makeContext(baseGlobalArgs({}));
+  try {
+    await model.methods.sync.execute({}, context);
+    const snap = written.find((w) => w.spec === "bucket");
+    assert(snap, "sync must write a bucket snapshot");
+    assertEquals(snap.data.defaultRetentionMode, null);
+    assertEquals(snap.data.defaultRetentionPeriod, null);
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("a half-read retention period is reported as null, not as a concrete window", () => {
+  // "7" with no unit is not a 7-day lock and not a 7-year one. Reporting the
+  // duration alone would read as a verified immutability window that nothing
+  // verified; null at least says "unknown".
+  const half = _internal.toBucketResource(
+    BUCKET_NAME,
+    bucketBody({
+      fileLockConfiguration: {
+        isClientAuthorizedToRead: true,
+        value: {
+          isFileLockEnabled: true,
+          defaultRetention: { mode: "governance", period: { duration: 7 } },
+        },
+      },
+    }),
+    "2026-01-01T00:00:00Z",
+  );
+  assertEquals(half.defaultRetentionMode, "governance");
+  assertEquals(half.defaultRetentionPeriod, null);
+  assertEquals(
+    _internal.BucketResourceSchema.safeParse(half).success,
+    true,
+    "a half-read period must still produce a writable snapshot",
+  );
+});
