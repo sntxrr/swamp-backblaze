@@ -456,11 +456,15 @@ const KeySchema = z.object({
       "sync cannot find the key).",
   ),
   secretDelivered: z.boolean().describe(
-    "True when this run wrote the one-shot secret to 1Password Connect.",
+    "True when this key's one-shot secret was delivered to 1Password Connect. " +
+      "A property of the KEY, not of the run: sync and delete carry the value " +
+      "forward rather than resetting it, because neither observes delivery.",
   ),
   secretDestination: z.string().nullable().describe(
-    "Human-readable location the secret was delivered to (vault/item/field). " +
-      "Never contains the secret itself.",
+    "Where the secret was delivered (vault/item/field). Never contains the " +
+      "secret itself. Carried forward by sync and delete — it is the only " +
+      "durable pointer to the stored credential, and it stays after a revoke " +
+      "so the orphaned item can still be found and cleaned up.",
   ),
   truncated: z.boolean().describe(
     'True when the b2_list_keys drain hit its page cap, so "not found" may ' +
@@ -771,6 +775,45 @@ export function normalizeBucketIds(k: RawKey): string[] {
   return [];
 }
 
+/**
+ * Read what a previous run recorded about this key's secret delivery.
+ *
+ * `sync` and `delete` observe nothing about delivery — B2 cannot tell you where
+ * a secret was filed — so they must not assert anything about it. Writing
+ * `secretDestination: null` from a read-only sync destroyed the only durable
+ * pointer to the stored credential, and since `data.latest()` returns the most
+ * recent snapshot, a routine sync made a delivered key look undelivered.
+ *
+ * Same rule as everywhere else in this suite: never encode "I did not look" as
+ * "it is not there". Returns the not-delivered defaults when there is no prior
+ * snapshot, which is the honest answer for a key this repo has never minted.
+ */
+export async function loadPriorDelivery(
+  context: {
+    readResource?: (
+      instanceName: string,
+      version?: number,
+    ) => Promise<Record<string, unknown> | null>;
+  },
+  keyId: string,
+): Promise<{ secretDelivered: boolean; secretDestination: string | null }> {
+  const none = { secretDelivered: false, secretDestination: null };
+  if (!context.readResource) return none;
+  try {
+    const prior = await context.readResource(keyId);
+    if (!prior) return none;
+    return {
+      secretDelivered: prior.secretDelivered === true,
+      secretDestination: typeof prior.secretDestination === "string"
+        ? prior.secretDestination
+        : null,
+    };
+  } catch {
+    // An unreadable prior snapshot is not evidence of anything either way.
+    return none;
+  }
+}
+
 export function toKeyResource(
   k: RawKey,
   extra: {
@@ -970,13 +1013,14 @@ export const model = {
             { keyId },
           );
         }
+        const priorDelivery = await loadPriorDelivery(context, keyId);
         const handle = await context.writeResource(
           "key",
           keyId,
           toKeyResource(found ?? {}, {
             status: found ? "present" : "absent",
-            secretDelivered: false,
-            secretDestination: null,
+            secretDelivered: priorDelivery.secretDelivered,
+            secretDestination: priorDelivery.secretDestination,
             truncated,
             observedAt,
             fallbackKeyId: keyId,
@@ -1206,13 +1250,14 @@ export const model = {
           }
         }
 
+        const priorDelivery = await loadPriorDelivery(context, keyId);
         const handle = await context.writeResource(
           "key",
           keyId,
           toKeyResource(deleted, {
             status: "absent",
-            secretDelivered: false,
-            secretDestination: null,
+            secretDelivered: priorDelivery.secretDelivered,
+            secretDestination: priorDelivery.secretDestination,
             truncated,
             observedAt: new Date().toISOString(),
             fallbackKeyId: keyId,

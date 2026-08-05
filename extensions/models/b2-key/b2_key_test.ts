@@ -1191,3 +1191,140 @@ Deno.test("a stale singular bucketId degrades to a one-element array", async () 
     },
   );
 });
+
+/** A context whose dataRepository serves one prior snapshot for `keyId`. */
+// deno-lint-ignore no-explicit-any
+function makeContextWithPrior(
+  globalArgs: Record<string, unknown>,
+  keyId: string,
+  prior: Record<string, unknown> | null,
+  // deno-lint-ignore no-explicit-any
+): any {
+  const base = makeContext(globalArgs);
+  base.ctx.readResource = (name: string) =>
+    Promise.resolve(prior && name === keyId ? prior : null);
+  return base;
+}
+
+Deno.test("sync preserves where a previously delivered secret lives", async () => {
+  // Live finding, 2026-08-05: after `create` recorded
+  // secretDestination: op://vault/item/applicationKey, a routine read-only
+  // `sync` overwrote the snapshot with null. That destination is the ONLY
+  // durable pointer to the credential, and data.latest() — the documented way
+  // to read a model — returns the sync version. So syncing a key silently
+  // destroyed the record of where its secret is stored.
+  //
+  // sync observes nothing about delivery, so it must not assert anything about
+  // it. Carrying the prior value forward is the same rule already applied to
+  // defaultRetentionPeriod and to the hygiene report: never encode "I did not
+  // look" as "it is not there".
+  const prior = {
+    applicationKeyId: KEY_ID,
+    secretDelivered: true,
+    secretDestination: "op://vault-uuid/item-uuid/applicationKey",
+  };
+  await withMockedFetch(
+    (url) =>
+      url.includes("b2_authorize_account") ? json(authBody()) : json({
+        keys: [{
+          applicationKeyId: KEY_ID,
+          keyName: "example",
+          capabilities: ["listBuckets"],
+          bucketIds: ["b1"],
+          namePrefix: null,
+          expirationTimestamp: null,
+          options: [],
+          accountId: AUTH.accountId,
+        }],
+        nextApplicationKeyId: null,
+      }),
+    async () => {
+      const { ctx, writes } = makeContextWithPrior(
+        { ...BASE_GLOBALS, managedKeyId: KEY_ID },
+        KEY_ID,
+        prior,
+      );
+      await model.methods.sync.execute({}, ctx);
+      assertEquals(writes[0].data.secretDelivered, true);
+      assertEquals(
+        writes[0].data.secretDestination,
+        "op://vault-uuid/item-uuid/applicationKey",
+      );
+    },
+  );
+});
+
+Deno.test("sync of a key with no prior snapshot reports no delivery", async () => {
+  await withMockedFetch(
+    (url) =>
+      url.includes("b2_authorize_account") ? json(authBody()) : json({
+        keys: [{
+          applicationKeyId: KEY_ID,
+          keyName: "example",
+          capabilities: ["listBuckets"],
+          bucketIds: ["b1"],
+          namePrefix: null,
+          expirationTimestamp: null,
+          options: [],
+          accountId: AUTH.accountId,
+        }],
+        nextApplicationKeyId: null,
+      }),
+    async () => {
+      const { ctx, writes } = makeContextWithPrior(
+        { ...BASE_GLOBALS, managedKeyId: KEY_ID },
+        KEY_ID,
+        null,
+      );
+      await model.methods.sync.execute({}, ctx);
+      assertEquals(writes[0].data.secretDelivered, false);
+      assertEquals(writes[0].data.secretDestination, null);
+    },
+  );
+});
+
+Deno.test("delete keeps the destination so the stored secret can be cleaned up", async () => {
+  // Revoking the key does not remove the 1Password item it was written to.
+  // Nulling the destination here would destroy the only pointer to the orphaned
+  // credential at the exact moment an operator needs it.
+  const prior = {
+    applicationKeyId: KEY_ID,
+    secretDelivered: true,
+    secretDestination: "op://vault-uuid/item-uuid/applicationKey",
+  };
+  await withMockedFetch(
+    (url) =>
+      url.includes("b2_authorize_account")
+        ? json(authBody())
+        : url.includes("b2_list_keys")
+        ? json({
+          keys: [{
+            applicationKeyId: KEY_ID,
+            keyName: "example",
+            capabilities: ["listBuckets"],
+            bucketIds: ["b1"],
+            namePrefix: null,
+            expirationTimestamp: null,
+            options: [],
+            accountId: AUTH.accountId,
+          }],
+          nextApplicationKeyId: null,
+        })
+        : json({ applicationKeyId: KEY_ID }),
+    async () => {
+      const { ctx, writes } = makeContextWithPrior(
+        { ...BASE_GLOBALS, managedKeyId: KEY_ID },
+        KEY_ID,
+        prior,
+      );
+      await model.methods.delete.execute({}, ctx);
+      const snap = writes[writes.length - 1].data;
+      assertEquals(snap.status, "absent");
+      assertEquals(
+        snap.secretDestination,
+        "op://vault-uuid/item-uuid/applicationKey",
+        "revoking the key must not erase where its secret was stored",
+      );
+    },
+  );
+});
