@@ -1,0 +1,11 @@
+type: '@sntxrr/b2/bucket'
+typeVersion: 2026.08.05.1
+id: b6e89d34-146f-4b83-aed5-f029cd2da065
+name: b2-bucket-smoke
+version: 1
+tags: {}
+globalArguments:
+  applicationKeyId: '${{ env.B2_APPLICATION_KEY_ID }}'
+  applicationKey: '${{ env.B2_APPLICATION_KEY }}'
+  bucketName: '${{ env.B2_SMOKE_BUCKET }}'
+methods: {}

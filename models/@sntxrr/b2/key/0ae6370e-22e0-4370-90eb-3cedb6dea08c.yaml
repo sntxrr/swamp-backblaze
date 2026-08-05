@@ -1,0 +1,11 @@
+type: '@sntxrr/b2/key'
+typeVersion: 2026.08.05.1
+id: 0ae6370e-22e0-4370-90eb-3cedb6dea08c
+name: b2-key-smoke
+version: 1
+tags: {}
+globalArguments:
+  applicationKeyId: '${{ env.B2_APPLICATION_KEY_ID }}'
+  applicationKey: '${{ env.B2_APPLICATION_KEY }}'
+  managedKeyId: '${{ env.B2_SMOKE_KEY_ID }}'
+methods: {}
