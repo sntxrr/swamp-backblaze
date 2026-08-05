@@ -568,6 +568,26 @@ swamp extension push "$DIR/manifest.yaml" --dry-run
 Never `--yes` past the review gate. Editing source or bumping the version
 invalidates the report — regenerate it.
 
+**Keep review reports in the repo, not in system temp.** The report path is
+bound to a content hash, and by default it lands under the OS temp directory,
+where it is one cleanup away from vanishing — which is precisely how b2-bucket's
+report went missing after its fixes landed. Point the base directory at
+`backblaze/reviews/` instead, and the reports survive:
+
+```bash
+export SWAMP_EXTENSION_REVIEW_DIR="$PWD/reviews"
+swamp extension push "$DIR/manifest.yaml" --dry-run
+```
+
+Note the tool appends its own `swamp-extension-review/` subdirectory to that
+base, so the file lands at `reviews/swamp-extension-review/<hash>.json`. Write
+the report to the exact path the warning prints — do not guess it.
+
+Run the four mechanical checks by **execution**, not by reading: import the
+model, run every method against a mocked `fetch`, and diff each spec's schema
+keys against the keys actually written. Judgment-based review has missed this
+class of defect in this suite every time.
+
 **Builders stop after step 5** and report back. The lead publishes.
 
 ---

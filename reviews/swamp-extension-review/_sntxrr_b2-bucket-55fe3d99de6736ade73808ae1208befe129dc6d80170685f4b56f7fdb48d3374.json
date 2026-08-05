@@ -1,0 +1,82 @@
+{
+  "extension": "@sntxrr/b2-bucket",
+  "version": "2026.08.05.1",
+  "reviewedAt": "2026-08-05T21:35:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "applicationKey is .meta({ sensitive: true }) and wired from a vault; the 24h authorizationToken is a bearer credential that is never logged and never written to a resource. Notification rules carry two secret surfaces — hmacSha256SigningSecret and arbitrary customHeaders values — and redactNotificationRule strips both before any snapshot. Both are marked sensitive in the input schema. A test executes all six methods and asserts no snapshot and no log line contains the application key, the auth token, the signing secret, or a custom header value. No resource schema has a field capable of holding a secret."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Every method logs entry and completion with structured placeholders — logger.info(\"Updated {bucketName}\", { bucketName }) — and there is no template-literal call to logger.info/warn anywhere in the module. Completion lines carry the facts an operator needs to distinguish outcomes (exists, bucketId, rule count, whether delete revoked or found nothing)."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "b2Fetch surfaces status and B2 code on the error object rather than collapsing failures to a string, retries only 429/503/500 with bounded backoff honoring Retry-After, and re-authorizes exactly once on 401 expired_auth_token. isAlreadyGone narrowly matches 404 and 400/bad_bucket_id only, so a generic bad_request propagates instead of being laundered into success. set_notification_rules refuses outright when the bucket does not exist rather than writing a misleading empty rule set."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "55 tests, all mocked — no live B2 call, no billed class C transaction. The writeResource stub validates every write against the real spec schema and rejects the reserved data name \"latest\", so it models what swamp enforces at run time rather than merely recording. This closes the gap that let a corsRules mapper fix be reverted with all 47 tests still green. Every fix in this review cycle was proven by execution in both directions: the test failed before the change and a half-fix (reverting only the delete-tombstone call site) fails it again."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "delete is idempotent on both documented already-gone signals and still writes an exists=false tombstone plus a notificationRules tombstone, so infinite-lifetime webhook rules cannot outlive the bucket they targeted. That tombstone path is written even when bucketId never resolved — the schema permits a null bucketId precisely for that case. sync, create and update are safe to re-run. update deliberately sends only what was supplied, so it cannot silently flip an allPublic bucket private."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "Built against the v4 nested apiInfo.storageApi shape, with the authorize guard validating apiUrl, downloadUrl and s3ApiUrl before any of them is dereferenced. All three authorization-wrapped blobs — fileLockConfiguration, defaultServerSideEncryption and replicationConfiguration — are unwrapped via .value, and a null value is reported as null (unknown) rather than as 'not configured'; reading the wrapper instead of .value is the bug that once reported 24/24 buckets replication-configured when 0 were. get_notification_rules is correctly a GET with query parameters. b2_list_buckets is called once via b2Fetch, not drained, because it is unpaginated — so no method in this model paginates and Truncation Honesty does not apply."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Two specs, both lifetime 'infinite' with garbageCollection 50, which is correct for records meant to outlive a run and support drift comparison. Mechanical field-coverage check executed against live code: spec 'bucket' 19/19 schema fields written across 4 writes, spec 'notificationRules' 5/5 across 3 writes, 1:1 both ways with no placeholder-filled field."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Audited before the repository was made public: every identifier in code, tests and docs is a marked fixture, and the one real-looking value (4a48fe8875c6214145260818) is Backblaze's own published documentation example. All 74 real identifiers extracted from the live account scan were cross-checked against every blob in git history with zero matches; the scan output lives under .swamp/, which is gitignored and has no tracked files. The only IP address used in docs is 192.0.2.10 (RFC 5737 documentation space)."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Deliberately asymmetric, and now tested to stay that way: strict on what the model SENDS (globalArgs.bucketInfo is Record<string,string> because B2 requires it; lifecycle and notification rule inputs are fully structured, and the notification-rule schema rejects a malformed event type), permissive on what it READS BACK. bucketInfo, corsRules and options are unmodelled or coerced on read because a single unexpected value must not make the whole snapshot unwritable — that would cost all visibility into the one bucket most worth inspecting. corsRule elements stay unmodelled until a live rule has actually been observed."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "Both specs are lifetime 'infinite' with garbageCollection 50. Infinite is right for the bucket snapshot: the policy check reads a prior snapshot to decide whether a bucket already prunes hidden versions, so an expiring record would silently weaken that gate. The notificationRules tombstone written by delete exists specifically because that spec is infinite-lifetime."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "pass",
+      "note": "sync, create, update, delete plus get_notification_rules and set_notification_rules. Drift detection is available because sync reads full current state including the derived retention verdict. update supports optimistic concurrency via ifRevisionIs, and revision is carried in the snapshot so a caller can supply it."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "lifecycle-hidden-version-retention is labelled policy and scoped appliesTo create/update, which matches swamp's auto-run vocabulary, so unlike b2-account's check this one genuinely fires. It refuses a bucket that would be left with no rule deleting hidden versions — the core cost bug this model exists to prevent — reads a prior snapshot as evidence when nothing is declared, and is waivable by an explicit globalArgs.allowUnprunedHiddenVersions. The method description records that pre-flight checks do NOT auto-run for set_notification_rules, rather than leaving that implicit."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Enumerated by execution across all six methods: spec 'bucket' and spec 'notificationRules' never share an instance name. The notificationRules prefix is required because instance names map onto storage paths. A bucket named exactly 'latest' is aliased to 'bucket-latest' — 'latest' is a reserved swamp data name rejected at write time only, and it is a legal 6-character B2 name in a global namespace, so without the alias every method would fail against that bucket with an opaque error. The alias is a fixed string rather than a bucketId fallback because the delete tombstone must be written even when no ID ever resolved. Investigated and dismissed: a cross-spec collision between a bucket literally named notification-rules-<x> and bucket <x>'s rules snapshot is impossible, because resources are namespaced per model instance and one instance manages exactly one bucket."
+    },
+    {
+      "id": "data-access",
+      "verdict": "pass",
+      "note": "Snapshots expose derived verdicts CEL can read directly — prunesHiddenVersions, minDaysFromHidingToDeleting, unprunedPrefixes — so a workflow does not have to walk the raw rule array to answer the question this model exists to answer. defaultRetentionPeriod was added this cycle for the same reason: defaultRetentionMode alone could not distinguish a 1-day Object Lock window from a 10-year one. Known cost, accepted: the fields left z.unknown()/unmodelled for read-safety (corsRules, bucketInfo) cannot be introspected by CEL."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "na",
+      "note": "Initial published version (2026.08.05.1). No prior release exists in the registry, so there is no upgrade path to assess."
+    }
+  ]
+}
