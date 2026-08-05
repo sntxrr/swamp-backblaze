@@ -90,6 +90,15 @@ function makeContext(globalArgs: Record<string, unknown>): {
       if (!resourceSpec) {
         throw new Error(`writeResource called with unknown spec "${spec}"`);
       }
+      // "latest" is reserved by swamp's data layer and is rejected at run
+      // time only. Model it here so a reserved-name bug fails in CI rather
+      // than against a real object.
+      if (name === "latest") {
+        throw new Error(
+          `writeResource("${spec}", "latest") uses the reserved swamp data ` +
+            `name "latest" — swamp would fail this at run time`,
+        );
+      }
       const parsed = resourceSpec.schema.safeParse(data);
       if (!parsed.success) {
         throw new Error(

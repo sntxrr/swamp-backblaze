@@ -200,6 +200,15 @@ function makeContext(globalArgs: Record<string, unknown>): {
         if (!resourceSpec) {
           throw new Error(`writeResource called with unknown spec "${spec}"`);
         }
+        // "latest" is reserved by swamp's data layer and is rejected at run
+        // time only. Model it here so a reserved-name bug fails in CI rather
+        // than against a real bucket.
+        if (name === "latest") {
+          throw new Error(
+            `writeResource("${spec}", "latest") uses the reserved swamp data ` +
+              `name "latest" — swamp would fail this at run time`,
+          );
+        }
         const parsed = resourceSpec.schema.safeParse(data);
         if (!parsed.success) {
           throw new Error(
@@ -1399,6 +1408,105 @@ Deno.test("no method writes a resource containing a secret", async () => {
         );
       }
       assertNoSecrets(logs, `${scenario.name} log lines`);
+    } finally {
+      f.restore();
+    }
+  }
+});
+
+Deno.test("a bucket legitimately named 'latest' does not wedge on the reserved data name", async () => {
+  // "latest" is 6 characters, so it is a legal B2 bucket name (6-63) and the
+  // namespace is global — someone owns it. swamp reserves "latest" as a data
+  // name and rejects it at run time only, so keying the snapshot on the bare
+  // bucket name makes this bucket unmanageable with an opaque failure.
+  const f = installFetch((_req, i) =>
+    i === 0
+      ? json(authBody([{ id: BUCKET_ID, name: "latest" }]))
+      : json({ buckets: [bucketBody({ bucketName: "latest" })] })
+  );
+  const { context, written } = makeContext(
+    baseGlobalArgs({ bucketName: "latest" }),
+  );
+  try {
+    await model.methods.sync.execute({}, context);
+    const bucketWrite = written.find((w) => w.spec === "bucket");
+    assert(bucketWrite, "sync must write a bucket snapshot");
+    assertEquals(
+      bucketWrite.name,
+      "bucket-latest",
+      "the reserved name must be aliased, not passed through",
+    );
+    // The snapshot still records the real bucket name; only the key is aliased.
+    assertEquals(bucketWrite.data.bucketName, "latest");
+  } finally {
+    f.restore();
+  }
+});
+
+Deno.test("every method that snapshots a bucket named 'latest' aliases the key", async () => {
+  // A guard that covers `sync` but not the tombstone path would leave the one
+  // case it was written for broken: `delete` must write a snapshot even when
+  // the bucket was never found and no bucketId ever resolved.
+  const cases: Array<{ label: string; method: string; handler: (i: number) => Response }> = [
+    {
+      label: "sync",
+      method: "sync",
+      handler: (i) =>
+        i === 0
+          ? json(authBody([{ id: BUCKET_ID, name: "latest" }]))
+          : json({ buckets: [bucketBody({ bucketName: "latest" })] }),
+    },
+    {
+      label: "create",
+      method: "create",
+      handler: (i) =>
+        i === 0
+          ? json(authBody([{ id: BUCKET_ID, name: "latest" }]))
+          : json(bucketBody({ bucketName: "latest" })),
+    },
+    {
+      label: "update",
+      method: "update",
+      handler: (i) =>
+        i === 0
+          ? json(authBody([{ id: BUCKET_ID, name: "latest" }]))
+          : json(bucketBody({ bucketName: "latest" })),
+    },
+    {
+      label: "delete (bucket already gone — bucketId never resolves)",
+      method: "delete",
+      handler: (i) =>
+        i === 0
+          ? json(authBody([{ id: BUCKET_ID, name: "latest" }]))
+          : json({ code: "not_found" }, 404),
+    },
+  ];
+
+  for (const c of cases) {
+    const f = installFetch((_req, i) => c.handler(i));
+    const { context, written } = makeContext(
+      baseGlobalArgs({
+        bucketName: "latest",
+        bucketId: BUCKET_ID,
+        lifecycleRules: RESTIC_LIFECYCLE,
+      }),
+    );
+    try {
+      await (model.methods as Record<string, {
+        execute: (a: unknown, c: unknown) => Promise<unknown>;
+      }>)[c.method].execute({}, context);
+      const bucketWrite = written.find((w) => w.spec === "bucket");
+      assert(bucketWrite, `${c.label} must write a bucket snapshot`);
+      assertEquals(
+        bucketWrite.name,
+        "bucket-latest",
+        `${c.label} must alias the reserved name`,
+      );
+      assertEquals(
+        bucketWrite.data.bucketName,
+        "latest",
+        `${c.label} must keep the real bucket name in the snapshot`,
+      );
     } finally {
       f.restore();
     }

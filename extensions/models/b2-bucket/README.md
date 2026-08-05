@@ -182,10 +182,17 @@ check see your declared lifecycle rules.
 | `bucket`            | `<bucketName>`                      | Full bucket configuration plus the hidden-version retention verdict |
 | `notificationRules` | `notification-rules-<bucketName>`   | Event notification rules, **redacted**                              |
 
-Both are keyed by the real bucket name — never the reserved data name `latest`.
-The notification-rules spec carries a prefix because instance names map directly
-onto storage paths and must be unique across *all* specs of a model: two specs
-sharing the bare bucket name would silently overwrite each other on disk.
+Both are keyed by the real bucket name. The notification-rules spec carries a
+prefix because instance names map directly onto storage paths and must be unique
+across *all* specs of a model: two specs sharing the bare bucket name would
+silently overwrite each other on disk.
+
+One exception: a bucket named exactly `latest` is keyed `bucket-latest`. `latest`
+is a reserved swamp data name that swamp rejects at write time only, and B2
+bucket names are 6-63 characters from a global namespace, so `latest` is a legal
+name somebody owns. Without the alias every method would fail against that bucket
+with an opaque run-time error. The snapshot still records `bucketName: "latest"`;
+only the instance key is aliased.
 
 ## Secret handling
 

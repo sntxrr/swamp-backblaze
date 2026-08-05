@@ -850,6 +850,26 @@ export function notificationRulesInstanceName(bucketName: string): string {
   return `notification-rules-${bucketName}`;
 }
 
+/**
+ * Instance name for a `bucket` snapshot.
+ *
+ * Normally the bare bucket name, so a snapshot stays addressable by the thing
+ * an operator actually types. The one exception is `"latest"`: swamp reserves
+ * it as a data name and rejects it at write time only, while B2 bucket names
+ * are 6-63 characters from a global namespace — `"latest"` is six, so it is a
+ * legal name that somebody owns. Left bare, that bucket would be unmanageable
+ * by this model, failing every method with an opaque run-time error.
+ *
+ * The alias is a fixed string rather than a fallback to `bucketId` because the
+ * `delete` tombstone has to be written even when the bucket was never found and
+ * no ID ever resolved. Aliasing cannot collide with a real bucket named
+ * `bucket-latest`: resources are namespaced per model instance, and one
+ * instance manages exactly one bucket.
+ */
+export function bucketInstanceName(bucketName: string): string {
+  return bucketName === "latest" ? "bucket-latest" : bucketName;
+}
+
 /** Build a `notificationRules` resource snapshot with every secret removed. */
 export function toNotificationRulesResource(
   bucketName: string,
@@ -995,7 +1015,7 @@ export const model = {
         }
         const handle = await context.writeResource(
           "bucket",
-          g.bucketName,
+          bucketInstanceName(g.bucketName),
           data,
         );
         logger.info("Synced bucket {bucketName} (exists={exists})", {
@@ -1058,7 +1078,7 @@ export const model = {
         );
         const handle = await context.writeResource(
           "bucket",
-          g.bucketName,
+          bucketInstanceName(g.bucketName),
           toBucketResource(g.bucketName, bucket, new Date().toISOString()),
         );
         logger.info("Created bucket {bucketName} (bucketId={bucketId})", {
@@ -1155,7 +1175,7 @@ export const model = {
         }
         const handle = await context.writeResource(
           "bucket",
-          g.bucketName,
+          bucketInstanceName(g.bucketName),
           data,
         );
         logger.info("Updated bucket {bucketName}", {
@@ -1206,7 +1226,7 @@ export const model = {
         const handles = [
           await context.writeResource(
             "bucket",
-            g.bucketName,
+            bucketInstanceName(g.bucketName),
             toBucketResource(g.bucketName, null, deletedAt),
           ),
         ];
@@ -1432,6 +1452,7 @@ export const _internal = {
   toBucketResource,
   toNotificationRulesResource,
   notificationRulesInstanceName,
+  bucketInstanceName,
   redactNotificationRule,
   findBucket,
   isAlreadyGone,
