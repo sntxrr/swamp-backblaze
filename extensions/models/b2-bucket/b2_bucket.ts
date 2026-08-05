@@ -1491,7 +1491,7 @@ export const model = {
         return {
           pass: false,
           errors: [
-            `Bucket "${g.bucketName}": no lifecycleRules are declared and no prior snapshot proves the bucket deletes hidden file versions, so this run could leave restic-pruned data billed forever. Declare lifecycleRules (e.g. ${example}), run sync first to record the bucket's real state, or set allowUnprunedHiddenVersions=true to accept this.`,
+            `Bucket "${g.bucketName}": no lifecycleRules are declared as a GLOBAL ARGUMENT, and no prior snapshot proves the bucket deletes hidden file versions, so this run could leave restic-pruned data billed forever. Declare them with --global-arg 'lifecycleRules=${example}', run sync first to record the bucket's real state, or set allowUnprunedHiddenVersions=true to accept this. NOTE: a --input lifecycleRules=... on this run cannot satisfy this check — swamp gives pre-flight checks the model's global arguments but not the method's inputs, so the check cannot see it. The method itself still honours the input; it is only this safety gate that is blind to it.`,
           ],
         };
       },

@@ -1,0 +1,15 @@
+type: '@sntxrr/b2/key'
+typeVersion: 2026.08.05.2
+id: 7f86826d-4e7f-4663-a5cc-606b4fe923eb
+name: b2-scratch-key
+version: 1
+tags: {}
+globalArguments:
+  applicationKeyId: '${{ env.B2_APPLICATION_KEY_ID }}'
+  applicationKey: '${{ env.B2_APPLICATION_KEY }}'
+  managedKeyId: '${{ env.B2_MINTED_KEY_ID }}'
+  connectHost: '${{ env.CONNECT_HOST }}'
+  connectToken: '${{ env.CONNECT_TOKEN }}'
+  connectVaultId: '${{ env.CONNECT_VAULT }}'
+  connectItemTitle: '${{ env.B2_SCRATCH_ITEM }}'
+methods: {}

@@ -1,0 +1,11 @@
+type: '@sntxrr/b2/bucket'
+typeVersion: 2026.08.05.2
+id: 83fe52dd-9ae2-45c0-b7f0-a562a91f4703
+name: b2-scratch-bucket
+version: 1
+tags: {}
+globalArguments:
+  applicationKeyId: '${{ env.B2_APPLICATION_KEY_ID }}'
+  applicationKey: '${{ env.B2_APPLICATION_KEY }}'
+  bucketName: '${{ env.B2_SCRATCH_BUCKET }}'
+methods: {}

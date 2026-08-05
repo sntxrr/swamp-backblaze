@@ -89,6 +89,28 @@ Escape hatches: set `allowUnprunedHiddenVersions=true` on the model, or
 `--skip-check lifecycle-hidden-version-retention` / `--skip-check-label policy`
 for one run.
 
+> **`--input lifecycleRules=...` cannot satisfy this check.** swamp hands a
+> pre-flight check the model's *global arguments* — never the method's inputs —
+> so the gate is structurally blind to `--input`. `create` and `update` still
+> honour the input and will send exactly what you passed; it is only the safety
+> check that cannot see it, and it fails the run before the method ever executes.
+>
+> ```bash
+> # Fails the check, even though the rule is correct and would have been applied
+> swamp model method run my-bucket create \
+>   --input 'lifecycleRules=[{"fileNamePrefix":"","daysFromUploadingToHiding":null,"daysFromHidingToDeleting":1}]'
+>
+> # Works: declare it on the model, which is what the check reads
+> swamp model create @sntxrr/b2/bucket my-bucket \
+>   --global-arg 'lifecycleRules=[{"fileNamePrefix":"","daysFromUploadingToHiding":null,"daysFromHidingToDeleting":1}]' \
+>   ...
+> swamp model method run my-bucket create
+> ```
+>
+> Treat the global argument as the declared intent for a bucket and the method
+> input as a one-off override — and remember that overriding *downward*, to a
+> weaker rule, is not gated by anything.
+
 > **`set_notification_rules` does not fire a pre-flight check.** swamp only
 > auto-runs `checks` before methods *named* `create`, `update`, `delete` or
 > `action`. The method keeps its descriptive name rather than being renamed to

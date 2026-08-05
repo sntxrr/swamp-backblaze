@@ -1708,3 +1708,33 @@ Deno.test("sync of a rule-less bucket writes the all-files unpruned marker", asy
     f.restore();
   }
 });
+
+Deno.test("the retention check explains that a method input cannot satisfy it", async () => {
+  // Live finding, 2026-08-05: `create --input lifecycleRules=[...]` — a
+  // documented input path — failed this check with "no lifecycleRules are
+  // declared", which reads as a lie to anyone who just declared them.
+  //
+  // swamp gives a check globalArgs, definition, methodName, repoDir, logger,
+  // dataRepository, modelType and modelId — never the method's inputs. The gate
+  // therefore CANNOT see --input, and the honest fix is to say so in the error
+  // rather than to imply the operator supplied nothing.
+  const check = model.checks["lifecycle-hidden-version-retention"];
+  const res = await check.execute({
+    globalArgs: _internal.GlobalArgsSchema.parse(baseGlobalArgs({})),
+    modelType: "@sntxrr/b2/bucket",
+    modelId: "m1",
+    logger: { info: () => {}, warn: () => {} },
+    // No dataRepository: a brand-new bucket has no prior snapshot to fall back on.
+  });
+  assertFalse(res.pass);
+  const msg = (res.errors ?? []).join(" ");
+  assertStringIncludes(msg, "GLOBAL ARGUMENT");
+  assertStringIncludes(msg, "--global-arg");
+  assertStringIncludes(
+    msg,
+    "cannot satisfy this check",
+    "the error must name the input path it is blind to, or it reads as a false accusation",
+  );
+  // And it must not claim the method ignores the input — it does not.
+  assertStringIncludes(msg, "method itself still honours the input");
+});
