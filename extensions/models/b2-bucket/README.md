@@ -63,6 +63,12 @@ Notes that will otherwise cost you an afternoon:
   `readBucketNotifications` rather than retrying.
 - **`set_notification_rules` replaces every rule on the bucket.** Pass the
   complete desired set; pass `[]` to remove them all.
+- **Event Notifications must be enabled on the B2 account.** If it is not, both
+  notification methods fail with `400 bad_request: "API not enabled"` — verified
+  live on 2026-08-05. That is an account entitlement, not a capability on your
+  application key, so minting a key with `readBucketNotifications` will not fix
+  it and neither will retrying. Enable Event Notifications for the account in
+  the B2 console first. Every other method in this model is unaffected.
 - **`delete` is idempotent.** A `404`, or a `400` with B2 code `bad_bucket_id`,
   is treated as success and still writes an `exists: false` snapshot.
 - **`create` is _not_ idempotent.** An existing name fails with
