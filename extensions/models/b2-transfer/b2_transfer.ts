@@ -840,17 +840,55 @@ export function assertDestructionAllowed(
 }
 
 /**
+ * The one message B2 gives for cancelling a large file that is already gone.
+ *
+ * Matching on message text violates this suite's own rule — branch on the
+ * `b2Code`, never on prose, because prose is unstable. It is done here because
+ * B2 leaves no alternative, and the alternative interpretations are worse. See
+ * `isAlreadyGone`.
+ */
+const NO_ACTIVE_UPLOAD = /no active upload for large file/i;
+
+/**
  * Treat "already gone" as success for an idempotent cancel.
  *
- * Deliberately narrow, and deliberately excludes `bad_bucket_id`: that is a
- * configuration error, and swallowing it would report a successful cancel of an
- * upload still accruing storage in the bucket the caller actually meant.
+ * Deliberately excludes `bad_bucket_id`: that is a configuration error, and
+ * swallowing it would report a successful cancel of an upload still accruing
+ * storage in the bucket the caller actually meant.
+ *
+ * **The `bad_request` case is live-verified and is a compromise.** Cancelling an
+ * already-cancelled large file does NOT return 404, `file_not_present` or
+ * `no_such_file` as the documented error table suggests. It returns:
+ *
+ * ```json
+ * { "code": "bad_request", "status": 400,
+ *   "message": "No active upload for large file (4_z...)" }
+ * ```
+ *
+ * `bad_request` is B2's catch-all — CONVENTIONS §4.7 records the same problem
+ * for `b2_delete_key` and warns that treating it as "already gone" wholesale
+ * would swallow genuine malformed-request bugs. That warning is right, so this
+ * does not do that. It requires the code AND the one specific message, which is
+ * the narrowest signal available: any other `bad_request` — a malformed file
+ * ID, a missing field — carries different prose and still throws.
+ *
+ * The considered alternative was to verify existence with
+ * `b2_list_unfinished_large_files` before cancelling, per the `b2_delete_key`
+ * precedent. Rejected: that call is addressed by BUCKET, so it would spend a
+ * class-C transaction on every delete and reintroduce the bucket-ID lookup this
+ * method deliberately avoids, locking out a bucket-restricted key with no
+ * `listBuckets` capability. Paying that on every call to improve the ergonomics
+ * of a no-op is the wrong trade.
  */
 export function isAlreadyGone(e: unknown): boolean {
-  const err = e as { status?: number; b2Code?: string };
+  const err = e as { status?: number; b2Code?: string; message?: string };
   if (err?.status === 404) return true;
   if (err?.status === 400) {
-    return err.b2Code === "file_not_present" || err.b2Code === "no_such_file";
+    if (err.b2Code === "file_not_present" || err.b2Code === "no_such_file") {
+      return true;
+    }
+    return err.b2Code === "bad_request" &&
+      NO_ACTIVE_UPLOAD.test(err.message ?? "");
   }
   return false;
 }
@@ -1347,27 +1385,30 @@ export const model = {
         return errors.length > 0 ? { pass: false, errors } : { pass: true };
       },
     },
-    "transfer-destruction-acknowledged": {
-      description:
-        "Refuse to run delete without allowTransferDestruction. NOTE: this catches the global-argument path only — swamp does not give checks the method's inputs, so `--input allowTransferDestruction=true` is invisible here and the real enforcement lives inside delete. This check exists to fail fast, before any B2 call, when the model itself is not configured to destroy anything.",
-      labels: ["policy"],
-      appliesTo: ["delete"],
-      // deno-lint-ignore require-await
-      execute: async (
-        context: { globalArgs: GlobalArgs },
-      ): Promise<{ pass: boolean; errors?: string[] }> => {
-        if (context.globalArgs.allowTransferDestruction) return { pass: true };
-        return {
-          pass: false,
-          errors: [
-            "Model does not set allowTransferDestruction, and delete cancels " +
-            "an in-flight large upload, discarding every part already sent. " +
-            "Acknowledge it with --input allowTransferDestruction=true for a " +
-            "single run, or set allowTransferDestruction=true on the model.",
-          ],
-        };
-      },
-    },
+    // THERE IS DELIBERATELY NO "destruction-acknowledged" PRE-FLIGHT CHECK.
+    //
+    // One existed and was removed after it blocked the first real deletion.
+    // swamp does not pass a method's inputs to its checks, so the check could
+    // only ever see globalArgs — which means `--input
+    // allowTransferDestruction=true`, the documented way to acknowledge a
+    // single run, was invisible to it and got rejected before `execute` ran.
+    // Its own error message told the operator to do the exact thing it made
+    // impossible.
+    //
+    // The consequence was worse than a bad message. With the per-run path
+    // blocked, the ONLY way to cancel anything was to set
+    // allowTransferDestruction: true permanently on the model definition — so
+    // a check written to prevent accidental destruction was in practice
+    // forcing operators to arm destruction permanently. It fired on the safe
+    // configuration and passed on the dangerous one.
+    //
+    // The real gate is assertDestructionAllowed inside `delete`, which sees
+    // BOTH the method input and the global argument, runs before any B2 call,
+    // and is covered by tests for each path. A pre-flight check cannot improve
+    // on that here, and this one actively made things worse. Do not re-add it.
+    //
+    // The same shape is latent in @sntxrr/b2/files' `file-destruction-
+    // acknowledged` check, which is already published — see the README.
     "transfer-limit-sane": {
       description:
         "A maxTransferBytes above 1 GiB defeats the guard that makes this model safe to install next to a restic estate.",

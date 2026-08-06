@@ -1,7 +1,7 @@
 {
   "extension": "@sntxrr/b2-hygiene",
   "version": "2026.08.06.1",
-  "reviewedAt": "2026-08-06T16:57:00Z",
+  "reviewedAt": "2026-08-06T17:23:00Z",
   "dimensions": [
     {
       "id": "credentials-secrets",
@@ -16,7 +16,7 @@
     {
       "id": "error-handling",
       "verdict": "pass",
-      "note": "Unchanged in substance and extended in scope. Neither report can fail a workflow — swamp treats a throwing report as advisory — so the risk is returning something confidently wrong, and every read stays defensive: readSnapshot returns null on a missing blob and on a parse failure, and an unreadable snapshot is skipped rather than counted as clean. toUpload coerces every field it reads and yields null for anything non-numeric, so a malformed snapshot degrades to 'age unknown' rather than to 'age zero', which would have been an accusation. The refusal paths now number five and all are tested: no inventory step, a failed inventory step, a failed sizing step, a missing upload step and a failed upload step. The last two matter because interrupted uploads are invisible everywhere else — an absent list of them reads as 'there are none', which is the most flattering possible lie about the one waste nothing else can see, so both cases print a caveat above the numbers instead."
+      "note": "Unchanged in substance and extended in scope. Neither report can fail a workflow — swamp treats a throwing report as advisory — so the risk is returning something confidently wrong, and every read stays defensive: readSnapshot returns null on a missing blob and on a parse failure, and an unreadable snapshot is skipped rather than counted as clean. toUpload coerces every field it reads and yields null for anything non-numeric, so a malformed snapshot degrades to 'age unknown' rather than to 'age zero', which would have been an accusation. The refusal paths now number five and all are tested: no inventory step, a failed inventory step, a failed sizing step, a missing upload step and a failed upload step. The last two matter because interrupted uploads are invisible everywhere else — an absent list of them reads as 'there are none', which is the most flattering possible lie about the one waste nothing else can see, so both cases print a caveat above the numbers instead. One further defect was found after this report's previous revision, and only by REMEDIATING the fleet: a sweep that finds no abandoned uploads writes no snapshots, so spec-based step discovery could not see it, and uploadSweepComplete flipped to false with the whole section vanishing at exactly the moment the estate became clean. 'We swept and found none' rendered identically to 'no sweep ran' — the absence-of-evidence failure this suite exists to prevent, arriving only once the problem was fixed. The step is now located by spec first and by modelType as a fallback (a published type string, not an author-chosen label), with tests asserting both that a clean sweep still reports itself AND that a genuinely absent step is still reported absent, so the fallback cannot manufacture a sweep that never happened."
     },
     {
       "id": "testing-completeness",

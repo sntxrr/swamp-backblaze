@@ -42,6 +42,13 @@ these methods. This one says no.
 | `copy_part`          | `b2_copy_part`                                                                   | **yes** |
 | `delete`             | `b2_cancel_large_file`                                                           | **yes** |
 
+`delete` is idempotent, but not for the reason B2's error table suggests.
+Cancelling an already-cancelled large file returns neither `404` nor
+`file_not_present` — it returns the catch-all `bad_request` with the message
+`No active upload for large file (...)`. This model matches the code **and**
+that specific message; any other `bad_request` still throws, so a malformed
+request is never mistaken for a no-op.
+
 ## Required B2 capabilities
 
 | Method               | Capabilities                                                     |
@@ -152,6 +159,13 @@ to catch.
   global argument). Cancelling an in-flight large upload discards every part
   already sent; against a backup mid-run that destroys work the backup tool is
   never told about.
+- **There is deliberately no pre-flight check for that acknowledgement.** One
+  existed and was removed after it blocked the first real deletion. swamp does
+  not pass method inputs to checks, so it could only see `globalArgs` — making
+  `--input allowTransferDestruction=true` invisible to it, and leaving
+  permanently setting the flag on the model as the only way through. A check
+  meant to prevent destruction was forcing it to be armed for good. The gate
+  lives in `execute`, which sees both paths.
 - **A failed large upload cancels itself.** Otherwise its parts would be stored
   and billed forever, invisibly. If the cancel *also* fails, the warning names
   the exact command to clean it up manually.

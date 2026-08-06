@@ -201,6 +201,52 @@ Trust these over the prose above and over any older example:**
    structurally type the elements until a bucket that actually has a rule has
    been scanned. Typing the container as an array is now safe.
 
+10. **`b2_cancel_large_file` on an already-cancelled file returns `bad_request`,
+    not `file_not_present`.** Live-verified 2026-08-06 while cancelling ten real
+    abandoned uploads:
+
+    ```json
+    { "code": "bad_request", "status": 400,
+      "message": "No active upload for large file (4_z...)" }
+    ```
+
+    So the already-gone code list in §3 does **not** cover large-file cancels,
+    exactly as it does not cover keys (item 7). Same dilemma, and the resolution
+    has to differ: for keys, §3 says verify existence first via `b2_list_keys`.
+    That is not available here — `b2_list_unfinished_large_files` is addressed by
+    **bucket**, so a pre-check would spend a class-C call on every delete and
+    reintroduce a bucket-ID lookup that `b2_cancel_large_file` (addressed by
+    `fileId` alone) does not otherwise need, locking out a bucket-restricted key
+    with no `listBuckets`.
+
+    `@sntxrr/b2/transfer` therefore matches the code **and** the specific message
+    `/no active upload for large file/i`. That knowingly breaks the "branch on
+    the code, never on prose" rule in §2, which is acceptable only because the
+    code is genuinely non-discriminating and the match is the narrowest
+    available: any other `bad_request` — malformed file ID, missing field —
+    carries different prose and still throws. Assert that second half in tests,
+    or the narrow match quietly becomes a blanket swallow.
+
+11. **A pre-flight check must never gate a method on an acknowledgement passed
+    as a method input.** Checks receive `globalArgs` only — swamp does not pass
+    method inputs to them — so a check guarding `delete` on
+    `allowFileDestruction`/`allowTransferDestruction` rejects
+    `--input allow...=true` before `execute` runs, and its error message then
+    instructs the operator to do the very thing it made impossible. Found by
+    running it: the first real `b2-transfer delete` was blocked this way.
+
+    The consequence is worse than a confusing message. With the per-run path
+    blocked, the only way through is setting the flag **permanently** on the
+    model definition — so a check written to prevent accidental destruction
+    ends up forcing destruction to be armed for good. It fires on the safe
+    configuration and passes on the dangerous one.
+
+    Put the gate in `execute`, which sees both the input and the global
+    argument, and assert with a test that no check declares
+    `appliesTo: ["delete"]`. **`@sntxrr/b2/files` still carries this defect** in
+    its published `file-destruction-acknowledged` check — its `delete` is
+    reachable only by permanently setting `allowFileDestruction` on the model.
+
 **Transaction cost classes** (this is real money, design against it):
 
 | Class | Operations                                                    | Note                          |

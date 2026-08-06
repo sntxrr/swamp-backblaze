@@ -597,6 +597,33 @@ Deno.test("execute joins all THREE steps: inventory, sizing and uploads", async 
   assertEquals(out.json.uploadSweepComplete, true);
 });
 
+Deno.test("a CLEAN sweep still reports that it swept", async () => {
+  // The defect this guards against only appears once the problem is fixed: a
+  // sweep that finds nothing writes no snapshots, so there is no spec to match
+  // on and the step goes invisible — making "we checked and found none" render
+  // identically to "no sweep ran". Found for real, the moment the ten abandoned
+  // uploads were cancelled.
+  const { context } = ctx(
+    [INVENTORY_STEP, { ...UPLOAD_STEP, dataHandles: [] }],
+    SNAPSHOTS,
+  );
+  const out = await report.execute(context);
+  assertEquals(out.json.uploadStepStatus, "succeeded");
+  assertEquals(out.json.uploadSweepComplete, true);
+  assertStringIncludes(out.markdown, "## Abandoned uploads");
+  assertStringIncludes(out.markdown, "No interrupted large uploads");
+});
+
+Deno.test("a genuinely absent upload step is still reported as absent", async () => {
+  // The fallback must not manufacture a step that was never in the workflow —
+  // otherwise it would claim a sweep happened when none did, which is the same
+  // lie in the other direction.
+  const { context } = ctx([INVENTORY_STEP], SNAPSHOTS);
+  const out = await report.execute(context);
+  assertEquals(out.json.uploadStepStatus, null);
+  assertFalse(out.markdown.includes("## Abandoned uploads"));
+});
+
 Deno.test("execute finds the upload step by its spec, not its name", async () => {
   const { context } = ctx(
     [INVENTORY_STEP, { ...UPLOAD_STEP, stepName: "renamed" }],

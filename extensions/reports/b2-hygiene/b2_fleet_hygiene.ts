@@ -735,7 +735,21 @@ export const report = {
       (hasSpec(s, "bucket") || hasSpec(s, "account"))
     );
     const sizingStep = steps.find((s) => hasSpec(s, "aggregate"));
-    const uploadStep = steps.find((s) => hasSpec(s, "unfinished-upload"));
+    // Spec-based discovery first, as everywhere else here — but it cannot be
+    // the only signal for this step, and the reason is specific to what this
+    // step looks for. A sweep that finds no abandoned uploads writes NO
+    // snapshots, so there is no `unfinished-upload` spec to match on, and the
+    // step becomes invisible. That is the healthy state: the report would stop
+    // saying it had checked at precisely the moment the fleet became clean, and
+    // "we swept and found none" would render identically to "no sweep ran".
+    //
+    // Found by fixing the problem: after the ten real abandoned uploads were
+    // cancelled, uploadSweepComplete flipped to false and the section vanished.
+    // The fallback keys on modelType, which — unlike a step name — is the
+    // extension's published type string and not a label the workflow author
+    // picks.
+    const uploadStep = steps.find((s) => hasSpec(s, "unfinished-upload")) ??
+      steps.find((s) => String(s?.modelType ?? "").endsWith("/b2/transfer"));
 
     if (!inventoryStep) {
       return {

@@ -1134,6 +1134,25 @@ Deno.test("copy_part records no sha1 verdict, because nothing was hashed locally
   }
 });
 
+Deno.test("no pre-flight check may gate delete on the acknowledgement", () => {
+  // FOUND BY ACTUALLY RUNNING IT. A check here can only see globalArgs — swamp
+  // does not pass method inputs to checks — so it rejects
+  // `--input allowTransferDestruction=true` before execute ever runs, and its
+  // error message then tells the operator to do the thing it just made
+  // impossible. Worse, with the per-run path blocked the only way through is
+  // setting allowTransferDestruction permanently on the model, so a check meant
+  // to prevent destruction ends up forcing it to be armed for good. The gate
+  // belongs in execute, which sees both paths.
+  for (const [name, check] of Object.entries(model.checks)) {
+    const applies = (check as { appliesTo?: string[] }).appliesTo;
+    assertFalse(
+      applies?.includes("delete") === true,
+      `check "${name}" gates delete; a pre-flight check cannot see ` +
+        `--input allowTransferDestruction and would block the per-run path`,
+    );
+  }
+});
+
 Deno.test("delete refuses without an acknowledgement, before any B2 call", async () => {
   const { calls, restore } = installFetch(router({}));
   try {
@@ -1194,6 +1213,52 @@ Deno.test("isAlreadyGone excludes bad_bucket_id, which is a config bug", () => {
   assert(_internal.isAlreadyGone({ status: 400, b2Code: "file_not_present" }));
   assertFalse(_internal.isAlreadyGone({ status: 400, b2Code: "bad_bucket_id" }));
   assertFalse(_internal.isAlreadyGone({ status: 500 }));
+});
+
+Deno.test("the real already-cancelled response is recognised, and only it", () => {
+  // LIVE-VERIFIED. Cancelling an already-cancelled large file returns neither
+  // 404 nor file_not_present — it returns B2's catch-all bad_request with one
+  // specific message:
+  //   {"code":"bad_request","status":400,
+  //    "message":"No active upload for large file (4_z...)"}
+  // Treating bad_request wholesale as "already gone" would swallow genuine
+  // malformed-request bugs (CONVENTIONS §4.7 warns of exactly this for
+  // b2_delete_key), so the code AND the message must both match.
+  assert(_internal.isAlreadyGone({
+    status: 400,
+    b2Code: "bad_request",
+    message:
+      'B2 b2_cancel_large_file failed (400, bad_request): {"code":"bad_request",' +
+      '"message":"No active upload for large file (4_zexample)","status":400}',
+  }));
+  // Any OTHER bad_request still throws — this is the assertion that keeps the
+  // message match from becoming a blanket swallow.
+  assertFalse(_internal.isAlreadyGone({
+    status: 400,
+    b2Code: "bad_request",
+    message: 'B2 failed (400, bad_request): {"message":"Invalid fileId"}',
+  }));
+  assertFalse(
+    _internal.isAlreadyGone({ status: 400, b2Code: "bad_request" }),
+    "a bad_request with no message must not be assumed already-gone",
+  );
+});
+
+Deno.test("delete is idempotent against the REAL already-cancelled response", async () => {
+  const { restore } = installFetch(router({
+    b2_cancel_large_file: json({
+      code: "bad_request",
+      status: 400,
+      message: "No active upload for large file (4_zexample)",
+    }, 400),
+  }));
+  try {
+    const { context, written } = makeContext({ allowTransferDestruction: true });
+    await model.methods.delete.execute({ fileId: LARGE_FILE_ID }, context);
+    assertEquals(written[0].data.status, "absent");
+  } finally {
+    restore();
+  }
 });
 
 // ---------------------------------------------------------------------------
