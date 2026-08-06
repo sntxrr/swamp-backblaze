@@ -1,0 +1,10 @@
+type: '@sntxrr/b2/transfer'
+typeVersion: 2026.08.06.1
+id: c10a21e7-0e74-4d00-accb-cf788217eb2d
+name: b2-transfer-audit
+version: 1
+tags: {}
+globalArguments:
+  applicationKeyId: '${{ vault.get(onepassword, "Backblaze/backblaze-primary-key") }}'
+  applicationKey: '${{ vault.get(onepassword, "Backblaze/backblaze-primary-application-key") }}'
+methods: {}

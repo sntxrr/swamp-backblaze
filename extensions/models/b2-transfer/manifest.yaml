@@ -1,0 +1,26 @@
+manifestVersion: 1
+
+name: "@sntxrr/b2-transfer"
+version: "2026.08.06.1"
+description: "Backblaze B2 data-plane transfers via the Native API v4 — the thirteen upload, download and large-file operations, guarded. Inventories the interrupted large uploads B2 bills for invisibly, proves a bucket is readable and writable end to end, and refuses to move more than 100 MB without an explicit override."
+repository: "https://github.com/sntxrr/swamp-backblaze"
+
+paths:
+  base: manifest
+
+models:
+  - b2_transfer.ts
+
+additionalFiles:
+  - README.md
+  - LICENSE.md
+
+labels:
+  - backblaze
+  - b2
+  - storage
+  - transfer
+  - upload
+  - download
+  - restic
+  - validation
