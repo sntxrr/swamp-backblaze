@@ -18,6 +18,7 @@ import {
 } from "jsr:@std/assert@1";
 import { analyze, renderFindingSections } from "./b2_hygiene.ts";
 import {
+  analyzeUploads,
   type FleetMeta,
   joinSizing,
   renderMarkdown,
@@ -25,6 +26,8 @@ import {
   sizeBucket,
   type SizedFinding,
   totalFleet,
+  totalUploads,
+  toUpload,
 } from "./b2_fleet_hygiene.ts";
 
 const GIB = 1024 ** 3;
@@ -62,9 +65,27 @@ function meta(over: Partial<FleetMeta> = {}): FleetMeta {
     scannedAt: "2026-08-06T00:00:00Z",
     sizingStepStatus: "succeeded",
     aggregateCount: 1,
+    uploadStepStatus: null,
+    uploadTotals: totalUploads([]),
     ...over,
   };
 }
+
+/** One unfinished upload, as the b2-transfer scan snapshots it. */
+function upload(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    fileId: "4_zexamplelargefileid00001",
+    fileName: "time-machine/bands/439",
+    bucketName: "example-synology",
+    ageDays: 1830,
+    partCount: 3,
+    partBytes: 3 * GIB,
+    partsTruncated: false,
+    status: "present",
+    ...over,
+  };
+}
+const ups = (rows: Array<Record<string, unknown>>) => rows.map(toUpload);
 
 // --- the four sizing states -------------------------------------------------
 
@@ -298,6 +319,115 @@ Deno.test("the worklist ranks buckets by bytes, not by severity", () => {
   );
 });
 
+// --- abandoned uploads ------------------------------------------------------
+
+Deno.test("an old interrupted upload is a finding, sized and named", () => {
+  const f = analyzeUploads(ups([upload()]));
+  assertEquals(f.length, 1);
+  assertEquals(f[0].code, "upload-abandoned");
+  assertEquals(f[0].severity, "medium");
+  assertStringIncludes(f[0].subject, "example-synology");
+  assertStringIncludes(f[0].detail, "3.00 GiB");
+  assertStringIncludes(f[0].impact, "allowTransferDestruction");
+});
+
+Deno.test("a RECENT upload is never called waste — it may be in flight", () => {
+  // The safety rule of this whole section. b2_list_unfinished_large_files
+  // returns an in-progress upload and an abandoned one identically, so calling
+  // every unfinished upload waste tells an operator to cancel a live transfer —
+  // discarding every part already sent while the uploading tool believes it
+  // succeeded.
+  assertEquals(analyzeUploads(ups([upload({ ageDays: 0 })])).length, 0);
+  const t = totalUploads(ups([upload({ ageDays: 0 })]));
+  assertEquals(t.abandonedCount, 0);
+  assertEquals(t.recentCount, 1, "it must still be counted, just not accused");
+  assertEquals(t.abandonedBytes, 0);
+});
+
+Deno.test("an upload with no age is unknown, neither waste nor safe", () => {
+  const f = analyzeUploads(ups([upload({ ageDays: null })]));
+  assertEquals(f[0].code, "upload-age-unknown");
+  assertEquals(f[0].severity, "low");
+  assertStringIncludes(f[0].impact, "in flight");
+  const t = totalUploads(ups([upload({ ageDays: null })]));
+  assertEquals(t.unknownAgeCount, 1);
+  assertEquals(t.abandonedCount, 0);
+});
+
+Deno.test("an already-cancelled upload is not re-reported", () => {
+  // status "absent" is a tombstone from a previous delete. Reporting it again
+  // would make a fixed problem look permanent.
+  assertEquals(analyzeUploads(ups([upload({ status: "absent" })])).length, 0);
+  assertEquals(totalUploads(ups([upload({ status: "absent" })])).abandonedCount, 0);
+});
+
+Deno.test("an unsized abandoned upload counts, but contributes no bytes", () => {
+  // partBytes null means countParts was off, not that the upload is empty.
+  const t = totalUploads(ups([upload({ partBytes: null, partCount: null })]));
+  assertEquals(t.abandonedCount, 1);
+  assertEquals(t.unsizedCount, 1);
+  assertEquals(t.abandonedBytes, 0, "no bytes may be invented for it");
+  const f = analyzeUploads(ups([upload({ partBytes: null, partCount: null })]));
+  assertStringIncludes(f[0].detail, "unmeasured");
+  assertStringIncludes(f[0].detail, "countParts");
+});
+
+Deno.test("a truncated part listing makes the upload total a floor", () => {
+  const t = totalUploads(ups([upload({ partsTruncated: true })]));
+  assert(t.isFloor);
+  const f = analyzeUploads(ups([upload({ partsTruncated: true })]));
+  assertStringIncludes(f[0].detail, "at least");
+});
+
+Deno.test("the abandoned-upload section states what it deliberately excluded", () => {
+  const rows = ups([
+    upload(),
+    upload({ ageDays: 0 }),
+    upload({ ageDays: null }),
+  ]);
+  const md = renderMarkdown(
+    joinSizing(analyzeUploads(rows), []),
+    totalFleet([]),
+    meta({ uploadStepStatus: "succeeded", uploadTotals: totalUploads(rows) }),
+  );
+  assertStringIncludes(md, "## Abandoned uploads");
+  assertStringIncludes(md, "IN FLIGHT");
+  assertStringIncludes(md, "Deliberately excluded");
+});
+
+Deno.test("no upload step at all renders no abandoned-upload section", () => {
+  // An empty section would read as "we looked and found none", which is the
+  // most flattering possible lie about the waste nothing else can see.
+  const md = renderMarkdown(
+    joinSizing(analyze([bucket()], []), [agg()]),
+    totalFleet([sizeBucket("example-host-ubuntu", [agg()])]),
+    meta({ uploadStepStatus: null }),
+  );
+  assertFalse(md.includes("## Abandoned uploads"));
+});
+
+Deno.test("a failed upload step is called out above the numbers", () => {
+  const md = renderMarkdown(
+    joinSizing([], []),
+    totalFleet([]),
+    meta({ uploadStepStatus: "failed", uploadTotals: totalUploads([]) }),
+  );
+  assertStringIncludes(md, "abandoned-upload sweep did not complete");
+  assert(
+    md.indexOf("did not complete") < md.indexOf("## Abandoned uploads"),
+    "the caveat must precede the section it qualifies",
+  );
+});
+
+Deno.test("toUpload defends against a snapshot with junk in it", () => {
+  const u = toUpload({ ageDays: "old", partBytes: "lots", status: 7 });
+  assertEquals(u.ageDays, null);
+  assertEquals(u.partBytes, null);
+  assertEquals(u.partsTruncated, null);
+  // A non-string status must not accidentally read as "present".
+  assertEquals(u.status, "7");
+});
+
 // --- the published method-scope report must not have changed ----------------
 
 Deno.test("renderFindingSections without an extra hook adds nothing per finding", () => {
@@ -444,6 +574,65 @@ Deno.test("an unreadable snapshot is skipped, not counted as a clean object", as
   const out = await report.execute(context);
   assertEquals(out.json.bucketCount, 0);
   assertEquals(out.json.findingCount, 0);
+});
+
+const UPLOAD_STEP = {
+  stepName: "find-abandoned-uploads",
+  modelType: "@sntxrr/b2/transfer",
+  modelId: "m3",
+  status: "succeeded",
+  dataHandles: [{ name: "unfinished-1", specName: "unfinished-upload" }],
+};
+
+Deno.test("execute joins all THREE steps: inventory, sizing and uploads", async () => {
+  const { context } = ctx(
+    [INVENTORY_STEP, SIZING_STEP, UPLOAD_STEP],
+    { ...SNAPSHOTS, "unfinished-1": upload() },
+  );
+  const out = await report.execute(context);
+  // One lifecycle finding plus one abandoned upload.
+  assertEquals(out.json.findingCount, 2);
+  assertStringIncludes(out.markdown, "## The lifecycle debt");
+  assertStringIncludes(out.markdown, "## Abandoned uploads");
+  assertEquals(out.json.uploadSweepComplete, true);
+});
+
+Deno.test("execute finds the upload step by its spec, not its name", async () => {
+  const { context } = ctx(
+    [INVENTORY_STEP, { ...UPLOAD_STEP, stepName: "renamed" }],
+    { ...SNAPSHOTS, "unfinished-1": upload() },
+  );
+  const out = await report.execute(context);
+  assertStringIncludes(out.markdown, "## Abandoned uploads");
+});
+
+Deno.test("a failed upload step contributes no abandoned uploads at all", async () => {
+  // It may have listed some buckets before dying, and "we found three" must not
+  // stand in for "there are three".
+  const { context } = ctx(
+    [INVENTORY_STEP, { ...UPLOAD_STEP, status: "failed" }],
+    { ...SNAPSHOTS, "unfinished-1": upload() },
+  );
+  const out = await report.execute(context);
+  assertEquals(out.json.uploadSweepComplete, false);
+  assertStringIncludes(out.markdown, "did not complete");
+  assertFalse(out.markdown.includes("3.00 GiB"));
+});
+
+Deno.test("uploadSweepComplete is independent of sizingComplete", async () => {
+  // The lifecycle sizing can be a floor while the upload sweep is whole, and a
+  // consumer acting on one must not be misled by the other's state.
+  const { context } = ctx(
+    [INVENTORY_STEP, SIZING_STEP, UPLOAD_STEP],
+    {
+      ...SNAPSHOTS,
+      "aggregate-example-all": agg({ truncated: true }),
+      "unfinished-1": upload(),
+    },
+  );
+  const out = await report.execute(context);
+  assertEquals(out.json.sizingComplete, false);
+  assertEquals(out.json.uploadSweepComplete, true);
 });
 
 Deno.test("the report declares workflow scope and audit labels", () => {

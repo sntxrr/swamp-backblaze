@@ -297,6 +297,171 @@ function describeSizing(s: Sizing): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Abandoned uploads — the third kind of waste, and the only one that can bite
+// ---------------------------------------------------------------------------
+
+/**
+ * How old an unfinished upload must be before it is called abandoned.
+ *
+ * This threshold is a SAFETY device, not a tuning knob. An interrupted large
+ * upload and an upload that is happening right now are the same object in the
+ * B2 API — `b2_list_unfinished_large_files` returns both, identically. So a
+ * report that flags every unfinished upload as waste is telling an operator to
+ * cancel a transfer that may be mid-flight, and `delete` would then discard
+ * every part already sent, silently, while the tool that was uploading carries
+ * on believing it succeeded.
+ *
+ * One day is far longer than any transfer this estate performs and far shorter
+ * than the five years the real abandoned uploads had been sitting. Anything
+ * younger is reported as excluded rather than as a finding.
+ */
+const ABANDONED_AFTER_DAYS = 1;
+
+/** One interrupted upload, as the b2-transfer scan snapshots it. */
+type UnfinishedUpload = {
+  fileId: string;
+  fileName: string;
+  bucketName: string;
+  ageDays: number | null;
+  partCount: number | null;
+  partBytes: number | null;
+  partsTruncated: boolean | null;
+  status: string;
+};
+
+/** What the abandoned-upload sweep found, and what it deliberately excluded. */
+export type UploadTotals = {
+  abandonedCount: number;
+  /** Bytes across abandoned uploads whose parts were actually measured. */
+  abandonedBytes: number;
+  /** Abandoned uploads whose parts were never counted — NOT zero bytes. */
+  unsizedCount: number;
+  /** Young enough to be in flight, so deliberately not called waste. */
+  recentCount: number;
+  /** No timestamp, so age could not be established either way. */
+  unknownAgeCount: number;
+  /** True when any contributing part listing was truncated. */
+  isFloor: boolean;
+};
+
+/** Coerce a snapshot into the fields this report reads, defensively. */
+export function toUpload(raw: Record<string, unknown>): UnfinishedUpload {
+  const n = (v: unknown): number | null =>
+    typeof v === "number" && Number.isFinite(v) ? v : null;
+  return {
+    fileId: String(raw.fileId ?? ""),
+    fileName: String(raw.fileName ?? ""),
+    bucketName: String(raw.bucketName ?? ""),
+    ageDays: n(raw.ageDays),
+    partCount: n(raw.partCount),
+    partBytes: n(raw.partBytes),
+    partsTruncated: typeof raw.partsTruncated === "boolean"
+      ? raw.partsTruncated
+      : null,
+    status: String(raw.status ?? "present"),
+  };
+}
+
+/**
+ * Turn interrupted uploads into findings, refusing to call a live one waste.
+ *
+ * Three outcomes, and the split is the whole point:
+ *
+ * - Old enough to be certainly dead → `upload-abandoned`, a real finding.
+ * - Young enough to be in flight → NO finding. Counted and reported as
+ *   excluded, so its absence from the list is visible rather than silent.
+ * - No timestamp at all → `upload-age-unknown` at low severity, which says
+ *   explicitly that it is not an accusation and not a clean bill.
+ *
+ * An upload already cancelled (`status: "absent"`) is not a finding either — it
+ * is a tombstone from a previous `delete`, and re-reporting it would make a
+ * fixed problem look permanent.
+ */
+export function analyzeUploads(uploads: UnfinishedUpload[]): Finding[] {
+  const findings: Finding[] = [];
+  for (const u of uploads) {
+    if (u.status !== "present") continue;
+    const where = `${u.bucketName}/${u.fileName}`;
+    if (u.ageDays === null) {
+      findings.push({
+        severity: "low",
+        code: "upload-age-unknown",
+        subject: where,
+        detail:
+          "An interrupted large upload B2 reported no start timestamp for, so " +
+          "its age could not be established.",
+        impact:
+          "Not evidence of waste, and not evidence of safety — it cannot be " +
+          "told apart from an upload that is in flight right now, and " +
+          "cancelling one of those discards every part already sent while the " +
+          "uploading tool carries on believing it succeeded. Establish its age " +
+          "before acting on it.",
+      });
+      continue;
+    }
+    if (u.ageDays < ABANDONED_AFTER_DAYS) continue;
+
+    const size = u.partBytes === null
+      ? "an unmeasured number of parts (run scan with countParts=true to size it)"
+      : `${u.partCount ?? "?"} part(s) totalling ${
+        u.partsTruncated ? "at least " : ""
+      }${gib(u.partBytes)}`;
+    findings.push({
+      severity: "medium",
+      code: "upload-abandoned",
+      subject: where,
+      detail:
+        `A large upload interrupted ${u.ageDays} day(s) ago still holds ${size}.`,
+      impact:
+        "B2 stores and bills an unfinished large file's parts indefinitely. " +
+        "They do not appear in b2_list_file_names and the console's file " +
+        "browser cannot show them, so unlike every other kind of waste here " +
+        "there is no way to notice this by looking. Cancel it with " +
+        "@sntxrr/b2/transfer delete --input allowTransferDestruction=true.",
+    });
+  }
+  return findings;
+}
+
+/**
+ * Total the abandoned uploads, keeping unmeasured ones out of the byte sum.
+ *
+ * Same rule as the lifecycle totals: an upload whose parts were never counted
+ * contributes to `unsizedCount`, never a zero to `abandonedBytes`. A byte total
+ * that quietly includes unmeasured objects as zero understates the waste, and
+ * understating is the one direction this report must not fail in.
+ */
+export function totalUploads(uploads: UnfinishedUpload[]): UploadTotals {
+  const t: UploadTotals = {
+    abandonedCount: 0,
+    abandonedBytes: 0,
+    unsizedCount: 0,
+    recentCount: 0,
+    unknownAgeCount: 0,
+    isFloor: false,
+  };
+  for (const u of uploads) {
+    if (u.status !== "present") continue;
+    if (u.ageDays === null) {
+      t.unknownAgeCount++;
+      continue;
+    }
+    if (u.ageDays < ABANDONED_AFTER_DAYS) {
+      t.recentCount++;
+      continue;
+    }
+    t.abandonedCount++;
+    if (u.partBytes === null) {
+      t.unsizedCount++;
+      continue;
+    }
+    t.abandonedBytes += u.partBytes;
+    if (u.partsTruncated === true) t.isFloor = true;
+  }
+  return t;
+}
+
 /** Metadata the renderer needs that is not derivable from the findings. */
 export type FleetMeta = {
   bucketCount: number;
@@ -307,6 +472,9 @@ export type FleetMeta = {
   /** Null when the workflow carried no b2-files step at all. */
   sizingStepStatus: "succeeded" | "failed" | "skipped" | null;
   aggregateCount: number;
+  /** Null when the workflow carried no b2-transfer step at all. */
+  uploadStepStatus: "succeeded" | "failed" | "skipped" | null;
+  uploadTotals: UploadTotals;
 };
 
 /** Render the combined audit as markdown. */
@@ -354,6 +522,15 @@ export function renderMarkdown(
       "",
     );
   }
+  if (meta.uploadStepStatus !== null && meta.uploadStepStatus !== "succeeded") {
+    lines.push(
+      `> **The abandoned-upload sweep did not complete** (the b2-transfer step` +
+        ` ${meta.uploadStepStatus}). Interrupted large uploads are invisible in` +
+        " the B2 console, so nothing below should be read as evidence there are" +
+        " none.",
+      "",
+    );
+  }
 
   lines.push(
     `Scanned ${meta.bucketCount} bucket(s) and ${meta.keyCount} application key(s)` +
@@ -384,6 +561,56 @@ export function renderMarkdown(
         `Not included above: ${totals.unmeasuredBuckets} bucket(s) no aggregate` +
           ` covered and ${totals.unmeasurableBuckets} bucket(s) whose scan could` +
           " not observe non-current versions. Those are unknowns, not zeroes.",
+        "",
+      );
+    }
+  }
+
+  // Kept as its own section rather than folded into the lifecycle total on
+  // purpose: these are two different wastes with two different fixes. The
+  // lifecycle debt is a policy gap fixed by a bucket rule; an abandoned upload
+  // is a stuck transfer fixed by cancelling it. Adding them would produce one
+  // number that points at neither remedy.
+  const u = meta.uploadTotals;
+  if (meta.uploadStepStatus !== null) {
+    lines.push("## Abandoned uploads", "");
+    if (u.abandonedCount === 0) {
+      lines.push(
+        "No interrupted large uploads older than " +
+          `${ABANDONED_AFTER_DAYS} day(s).`,
+        "",
+      );
+    } else {
+      lines.push(
+        `**${u.isFloor ? "At least " : ""}${gib(u.abandonedBytes)}** across` +
+          ` ${u.abandonedCount} interrupted large upload(s), billed as storage` +
+          " and invisible to `b2_list_file_names` and to the console's file" +
+          " browser alike.",
+        "",
+        `Estimated at **$${
+          (u.abandonedBytes / BYTES_PER_GB * USD_PER_GB_MONTH).toFixed(4)
+        }/month** at the same list price. A small sum here is still worth` +
+          " cancelling: nothing reclaims it on its own, and nothing else in" +
+          " this suite can see it.",
+        "",
+      );
+      if (u.unsizedCount > 0) {
+        lines.push(
+          `${u.unsizedCount} of those were never sized — run the b2-transfer` +
+            " scan with `countParts=true`. They are unmeasured, not empty.",
+          "",
+        );
+      }
+    }
+    // The exclusions are printed even when they are zero-free, because a reader
+    // must be able to tell "we found none" from "we deliberately left some out".
+    if (u.recentCount > 0 || u.unknownAgeCount > 0) {
+      lines.push(
+        `Deliberately excluded: ${u.recentCount} upload(s) younger than` +
+          ` ${ABANDONED_AFTER_DAYS} day(s), which may be IN FLIGHT right now,` +
+          ` and ${u.unknownAgeCount} whose age B2 did not report. Cancelling a` +
+          " live upload discards every part already sent while the uploading" +
+          " tool carries on believing it succeeded.",
         "",
       );
     }
@@ -508,6 +735,7 @@ export const report = {
       (hasSpec(s, "bucket") || hasSpec(s, "account"))
     );
     const sizingStep = steps.find((s) => hasSpec(s, "aggregate"));
+    const uploadStep = steps.find((s) => hasSpec(s, "unfinished-upload"));
 
     if (!inventoryStep) {
       return {
@@ -529,7 +757,21 @@ export const report = {
       ? await readSpec(context, sizingStep, "aggregate")
       : [];
 
-    const findings = analyze(buckets, keys);
+    // Same rule as the sizing step: only a succeeded sweep may contribute. A
+    // failed one that listed some buckets before dying would otherwise let
+    // "we found three" stand in for "there are three".
+    const uploads =
+      (uploadStep && uploadStep.status === "succeeded"
+        ? await readSpec(context, uploadStep, "unfinished-upload")
+        : []).map(toUpload);
+
+    const findings = [...analyze(buckets, keys), ...analyzeUploads(uploads)]
+      .sort((a, b) =>
+        SEVERITY_ORDER.indexOf(a.severity) -
+          SEVERITY_ORDER.indexOf(b.severity) ||
+        a.code.localeCompare(b.code) ||
+        a.subject.localeCompare(b.subject)
+      );
     const sized = joinSizing(findings, aggregates);
 
     // Total over every bucket in the inventory, not merely over the ones that
@@ -549,16 +791,20 @@ export const report = {
         : null,
       sizingStepStatus: sizingStep ? sizingStep.status : null,
       aggregateCount: aggregates.length,
+      uploadStepStatus: uploadStep ? uploadStep.status : null,
+      uploadTotals: totalUploads(uploads),
     };
 
     context.logger?.info?.(
-      "B2 fleet audit: {n} finding(s) over {b} bucket(s), {m} bucket(s) sized, {g} of non-current data{floor}",
+      "B2 fleet audit: {n} finding(s) over {b} bucket(s), {m} bucket(s) sized, {g} of non-current data{floor}; {a} abandoned upload(s) holding {ab}",
       {
         n: findings.length,
         b: buckets.length,
         m: totals.measuredBuckets + totals.truncatedBuckets,
         g: gib(totals.nonCurrentBytes),
         floor: totals.isFloor ? " (a FLOOR — some listings truncated)" : "",
+        a: meta.uploadTotals.abandonedCount,
+        ab: gib(meta.uploadTotals.abandonedBytes),
       },
     );
 
@@ -572,6 +818,11 @@ export const report = {
         // needs to know which of the two it is looking at.
         sizingComplete: !totals.isFloor && totals.unmeasuredBuckets === 0 &&
           totals.unmeasurableBuckets === 0,
+        // A third completeness flag, separate again: the abandoned-upload sweep
+        // can be whole while the lifecycle sizing is a floor, or vice versa,
+        // and a consumer acting on one must not be misled by the other's state.
+        uploadSweepComplete: meta.uploadStepStatus === "succeeded" &&
+          !meta.uploadTotals.isFloor && meta.uploadTotals.unsizedCount === 0,
         findingCount: findings.length,
         totals,
         rate: { usdPerGbMonth: USD_PER_GB_MONTH, observed: RATE_OBSERVED },

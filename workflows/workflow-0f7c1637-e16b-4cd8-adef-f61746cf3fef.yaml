@@ -87,6 +87,39 @@ jobs:
         # column. Note the aggregate carries its own truncated flag for the
         # partial-listing case; this guard is for the run failing outright.
         allowFailure: false
+      - name: find-abandoned-uploads
+        description: >-
+          One read-only b2-transfer scan for interrupted large uploads across
+          every bucket the key can see. These are the estate's third kind of
+          waste and the least visible of the three: a large upload that never
+          reached b2_finish_large_file leaves its parts stored and billed
+          indefinitely, they do not appear in b2_list_file_names, and the B2
+          console's file browser cannot show them at all — so unlike the
+          lifecycle debt there is no way to notice them by clicking around.
+          The first live run of this step found ten stuck since 2021.
+          countParts is on because an unsized finding is not actionable: the
+          whole point is turning "there is an abandoned upload" into "it is
+          costing this much". It bills one extra class-C call per unfinished
+          file, which is negligible at this scale precisely because there are
+          few of them.
+        task:
+          type: model_method
+          modelIdOrName: b2-transfer-audit
+          methodName: scan
+          inputs:
+            countParts: true
+        # Parallel to the file sweep rather than after it: they read different
+        # B2 endpoints and neither depends on the other's output. Both still
+        # gate on the cheap inventory pass having succeeded.
+        dependsOn:
+          - step: scan-account
+            condition:
+              type: succeeded
+        weight: 0
+        # Same reasoning as the other two steps. An absent list of abandoned
+        # uploads reads as "there are none", which is the most flattering
+        # possible lie about the one form of waste nothing else can see.
+        allowFailure: false
     dependsOn: []
     weight: 0
 version: 1

@@ -127,10 +127,18 @@ reports:
     - '@sntxrr/b2/fleet-hygiene'
 ```
 
-The workflow needs two steps: an `@sntxrr/b2/account` `scan` and an
-`@sntxrr/b2/files` `scan`. The report finds them by the **specs they wrote**
-(`bucket`/`account` and `aggregate`), never by step or model name, so renaming a
-step does not break it.
+The workflow can carry up to three steps, and the report finds each by the
+**specs it wrote** — never by step or model name, so renaming a step does not
+break it:
+
+| Step                | Model                 | Spec read           | Adds                        |
+| ------------------- | --------------------- | ------------------- | --------------------------- |
+| inventory *(required)* | `@sntxrr/b2/account` | `bucket`, `account` | the findings themselves     |
+| sizing              | `@sntxrr/b2/files`    | `aggregate`         | non-current byte cost       |
+| abandoned uploads   | `@sntxrr/b2/transfer` | `unfinished-upload` | interrupted large uploads   |
+
+Only the inventory step is required. A missing sizing or upload step is stated
+in the output rather than silently producing a shorter report.
 
 ```bash
 swamp workflow run b2-fleet-audit
@@ -171,22 +179,60 @@ The last three are unknowns and are never rendered, summed, or exported as `0`.
 half of a bucket's numbers would shrink the apparent waste ratio. Understating
 the debt is the one direction this must never fail in.
 
-Branch on `sizingComplete` — deliberately separate from `inventoryComplete`,
-since the inventory can be whole while the sizing over it is a floor:
+### Abandoned uploads, and the one finding that can bite
+
+The third step surfaces **interrupted large uploads** — a `b2_start_large_file`
+that never reached `b2_finish_large_file`. B2 stores and bills their parts
+indefinitely, they never appear in `b2_list_file_names`, and the console's file
+browser cannot show them, so unlike the lifecycle debt there is no way to notice
+them by clicking around. The first live run found ten stuck since 2021.
+
+**An in-progress upload and an abandoned one are the same object in the B2 API.**
+`b2_list_unfinished_large_files` returns both, identically. So this report will
+not call a recent one waste:
+
+| Age                 | Treated as                                          |
+| ------------------- | --------------------------------------------------- |
+| ≥ 1 day             | `upload-abandoned` (medium) — safe to cancel        |
+| < 1 day             | **not a finding**; counted as excluded, may be live |
+| no timestamp        | `upload-age-unknown` (low) — establish age first    |
+| already cancelled   | not reported; it is a tombstone, not a problem      |
+
+Cancelling a live upload discards every part already sent while the uploading
+tool carries on believing it succeeded. The excluded counts are always printed,
+so "we found none" is distinguishable from "we deliberately left some out".
+
+`partBytes: null` means `countParts` was off, not that the upload is empty —
+those count toward `unsizedCount` and contribute **no** bytes to the total.
+
+### Three completeness flags, deliberately separate
+
+Branch on the one you are acting on. `inventoryComplete` can be true while
+`sizingComplete` is a floor, and the upload sweep is independent of both:
 
 ```json
 {
   "inventoryComplete": true,
   "sizingComplete": true,
+  "uploadSweepComplete": true,
   "totals": {
     "measuredBuckets": 24, "truncatedBuckets": 0,
     "unmeasurableBuckets": 0, "unmeasuredBuckets": 0,
     "nonCurrentBytes": 42561501224, "isFloor": false,
     "estimatedMonthlyUsd": 0.2554
   },
+  "uploadTotals": {
+    "abandonedCount": 10, "abandonedBytes": 1275068416,
+    "unsizedCount": 0, "recentCount": 0, "unknownAgeCount": 0,
+    "isFloor": false
+  },
   "rate": { "usdPerGbMonth": 0.006, "observed": "2026-08" }
 }
 ```
+
+The two byte totals are kept **separate, never summed**: the lifecycle debt is a
+policy gap fixed by a bucket rule, an abandoned upload is a stuck transfer fixed
+by cancelling it. One combined number would point at neither remedy.
 
 **Set `maxPages` high enough on the b2-files step.** The default of 50 truncates
 past ~500k versions, which silently capped the six largest buckets on the first

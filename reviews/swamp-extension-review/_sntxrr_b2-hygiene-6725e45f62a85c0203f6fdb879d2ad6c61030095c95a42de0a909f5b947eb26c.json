@@ -1,0 +1,47 @@
+{
+  "extension": "@sntxrr/b2-hygiene",
+  "version": "2026.08.06.1",
+  "reviewedAt": "2026-08-06T16:57:00Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "Neither report holds, receives or reads a credential. Both are read-only consumers of resource snapshots that other models already wrote, and the models that DO hold B2 credentials (b2-account, b2-files) are independently asserted never to write one into a snapshot. So the only way a secret could reach this package is if an upstream snapshot carried one, which their own suites forbid. The new workflow-scope report widens the read surface — it reads a second model's snapshots via stepExecutions — but not the sensitivity of what it reads: aggregate carries byte counts, file counts and timestamps, no identifiers beyond bucket names and IDs. Re-checked against the live output: the rendered markdown and JSON from two real fleet runs contain bucket names, bucket IDs and application key IDs (already masked as 002***0000000003 by b2-account upstream), and no token, key material or URL."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Both reports log one structured summary line with named placeholders and a props object, never string concatenation. The new report's line carries the fact a reader most needs and would otherwise have to compute — whether the byte total is a floor — as an explicit suffix rather than leaving it implied by a flag elsewhere. The markdown itself is the real output surface and it is ordered on a deliberate principle, inherited from the method-scope report and made stricter here: every incompleteness caveat renders ABOVE the number it qualifies, because a caveat printed below a total does not get read and a total quoted without its caveat is worse than no total. Asserted by test rather than by inspection ('the floor warning appears before any byte total' compares string indices)."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "Unchanged in substance and extended in scope. Neither report can fail a workflow — swamp treats a throwing report as advisory — so the risk is returning something confidently wrong, and every read stays defensive: readSnapshot returns null on a missing blob and on a parse failure, and an unreadable snapshot is skipped rather than counted as clean. toUpload coerces every field it reads and yields null for anything non-numeric, so a malformed snapshot degrades to 'age unknown' rather than to 'age zero', which would have been an accusation. The refusal paths now number five and all are tested: no inventory step, a failed inventory step, a failed sizing step, a missing upload step and a failed upload step. The last two matter because interrupted uploads are invisible everywhere else — an absent list of them reads as 'there are none', which is the most flattering possible lie about the one waste nothing else can see, so both cases print a caveat above the numbers instead."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "66 tests (22 method-scope + 44 workflow-scope), all genuinely executing under type-check. Everything the previous review recorded still holds; this round adds the abandoned-upload join and its own mutation proof. The guard that matters most — refusing to call a recent upload waste — was verified to bite by deleting it: the single line `if (u.ageDays < ABANDONED_AFTER_DAYS) continue;` was removed and 'a RECENT upload is never called waste' failed, then it was restored and the suite re-verified green. That is the mutation worth running here, because that line is the only thing standing between this report and advice that destroys live data. Coverage also includes the three-way age split (old / recent / no-timestamp), the tombstone case, the unsized case, both floor cases, all three step-absent and step-failed paths, and a junk-snapshot case asserting toUpload coerces defensively rather than letting a non-string status read as 'present'. Standing limit, unchanged and still worth stating: the fixtures are hand-written, and this suite's whole history is live data finding what mocks could not — most recently, on the same day as this review, an 83-character B2 file ID that a 25-character fixture had hidden."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Both reports are pure functions of already-written snapshots: they call no API, mutate nothing, and re-running one over the same data produces the same output. Verified rather than assumed — the workflow ran twice today over an unchanged fleet and the second run reproduced the first's finding count (52), bucket count (24) and byte total (39.64 GiB) exactly, with the only differences being the deliberate unit-rendering fix and the aggregates' own observedAt. Resilience to partial input is the substance of this dimension here, and it is handled by refusal rather than by best-effort: a missing, failed or absent step produces an explicit skip or an explicit unpriced audit, never a silently smaller number."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "No external API, but now THREE internal contracts rather than two. First, swamp's WorkflowReportContext (stepExecutions with per-step modelType, modelId, dataHandles, status; dataRepository.getContent) — confirmed live across three different models in one execution. Second, the b2-files aggregate shape. Third, added this round, the b2-transfer unfinished-upload shape: fileId, fileName, bucketName, ageDays, partCount, partBytes, partsTruncated and status. All three are consumed defensively and all three steps are located by the SPECS they wrote, never by step or model name, so renaming a workflow step cannot silently disable a join; asserted by tests that rename each step and expect identical output. The upload contract's honest-null semantics are relied upon and re-asserted here rather than assumed: partBytes null means countParts was off, and this report must not turn that into a zero."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "Read-only and cheap: no B2 transactions, bounded by what the workflow already produced (210 aggregates, 47 inventory snapshots and 10 unfinished-upload snapshots on the live run). sizeBucket memoises per subject. The judgements recorded previously stand — prefer the group===null total over summing groups, and scale byte units so a real quantity never rounds to 0.00 GiB. One added this round: the abandoned-upload bytes are kept in a SEPARATE total and section rather than folded into the lifecycle debt. They are two different wastes with two different remedies — a bucket lifecycle rule versus cancelling a stuck transfer — and one combined number would point at neither. The workflow's third step runs parallel to the file sweep rather than after it, since they read different B2 endpoints and neither depends on the other's output; both still gate on the cheap inventory pass succeeding."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "Every fixture and README example uses example.com-class names and fake-but-plausible B2 identifiers (example-host-ubuntu, b00000000000000000000001, 0021a2b3c4d5e6f0000000001). Checked with deliberate care this round, because the work involved reading two live fleet reports full of real bucket names and it is exactly the moment one gets pasted into a fixture: the source, the tests and the manifest contain no real bucket name. One correction was made during this review: a first draft of the README quoted its worked worklist using REAL bucket names lifted straight from the live run. Harmless in isolation — they are private-bucket names disclosing no credential or endpoint — but inconsistent with this repo's own standard, which is that published surfaces carry counts and proportions but never real identifiers (the existing README says '0 of 24 buckets', not which 24). Rewritten to example-prefixed names, keeping the real proportions, which is what actually carries the argument. Worth recording because the moment of danger is specific and repeatable: it is while reading live output that a real name gets pasted into a doc."
+    }
+  ]
+}
