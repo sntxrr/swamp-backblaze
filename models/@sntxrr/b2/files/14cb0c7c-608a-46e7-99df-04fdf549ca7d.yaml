@@ -1,0 +1,10 @@
+type: '@sntxrr/b2/files'
+typeVersion: 2026.08.05.1
+id: 14cb0c7c-608a-46e7-99df-04fdf549ca7d
+name: b2-files-audit
+version: 1
+tags: {}
+globalArguments:
+  applicationKeyId: '${{ vault.get(onepassword, "Backblaze/backblaze-primary-key") }}'
+  applicationKey: '${{ vault.get(onepassword, "Backblaze/backblaze-primary-application-key") }}'
+methods: {}

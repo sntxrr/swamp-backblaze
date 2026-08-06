@@ -5,18 +5,18 @@ description: >-
   key in the account, then lets the @sntxrr/b2/hygiene report turn that
   inventory into findings: buckets with no hidden-version retention rule (the
   cost leak behind restic forget --prune), account-wide or orphaned application
-  keys, and public buckets. Mutates nothing and is safe to schedule.
+  keys, and public buckets. A second step then sizes that leak in bytes.
+  Mutates nothing and is safe to schedule.
 tags:
   kind: audit
   readOnly: "true"
 jobs:
   - name: audit
     description: >-
-      Inventory the account. This is deliberately a single step today: the
-      analysis lives in the b2-hygiene report, which runs after the scan and
-      owns the truncation-honesty guard. Wave 2 adds a second step here — a
-      per-bucket b2-files aggregate — which is what finally sizes the
-      hidden-version debt this audit can currently only point at.
+      Inventory the account, then measure what its missing lifecycle rules
+      cost. The findings live in the b2-hygiene report, which is method-scoped
+      to the b2-account scan and owns the truncation-honesty guard; the sizing
+      lives in the b2-files aggregate. Both steps are read-only.
     steps:
       - name: scan-account
         description: >-
@@ -33,6 +33,41 @@ jobs:
         # Never set this true. A failed scan must fail the audit: a partial
         # inventory reporting no findings is indistinguishable from a clean
         # account, and that is the one output this must never produce.
+        allowFailure: false
+      - name: size-hidden-version-debt
+        description: >-
+          One read-only b2-files scan across every bucket the key can see —
+          b2-files-audit deliberately leaves bucketName unset, which is what
+          puts scan in fleet mode and keeps the whole sweep behind a single
+          acquisition of the per-model lock. This is the step that turns
+          "0 of 24 buckets prunes hidden versions" from a policy finding into
+          a number: the aggregate separates currentBytes from the
+          nonCurrentBytes B2 still stores and still bills for every pack file
+          restic has ever pruned. groupBy=topLevel additionally splits each
+          bucket by restic's layout, so the debt is attributable to data/
+          rather than merely to the bucket. Cost is one class-C transaction
+          per 1000 file versions and is reported per bucket in
+          classCTransactions.
+        task:
+          type: model_method
+          modelIdOrName: b2-files-audit
+          methodName: scan
+          inputs:
+            groupBy: topLevel
+        # Ordered after the inventory rather than parallel to it: this is by
+        # far the more expensive sweep, and there is no point paying to
+        # enumerate every version of every bucket when the cheap pass over
+        # buckets and keys has already failed.
+        dependsOn:
+          - step: scan-account
+            condition:
+              type: succeeded
+        weight: 0
+        # Never set this true either, and for the same reason as above. A
+        # silently absent byte total does not read as "we could not measure
+        # it" — it reads as no debt, which is the same lie in a different
+        # column. Note the aggregate carries its own truncated flag for the
+        # partial-listing case; this guard is for the run failing outright.
         allowFailure: false
     dependsOn: []
     weight: 0
