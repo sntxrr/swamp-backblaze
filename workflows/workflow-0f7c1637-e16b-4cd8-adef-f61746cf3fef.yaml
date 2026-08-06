@@ -10,6 +10,15 @@ description: >-
 tags:
   kind: audit
   readOnly: "true"
+# @sntxrr/b2/fleet-hygiene is workflow-scope, so it can see BOTH steps and is
+# the only place the findings and their byte cost can be joined: a method-scope
+# report only ever sees the resources its own execution wrote, and the sizing
+# lives in a different model's. Required rather than merely available, for the
+# same reason neither step may allowFailure — an audit that silently drops the
+# cost half still renders as a complete audit.
+reports:
+  require:
+    - "@sntxrr/b2/fleet-hygiene"
 jobs:
   - name: audit
     description: >-
@@ -54,6 +63,15 @@ jobs:
           methodName: scan
           inputs:
             groupBy: topLevel
+            # The default of 50 pages (~500k versions) truncated the six
+            # largest buckets on the first live run, and a truncated aggregate
+            # reports a FLOOR that reads exactly like a total. 600 covers the
+            # largest bucket observed (2.69M versions fleet-wide) with room to
+            # grow. This costs nothing extra on small buckets — listing stops
+            # when the bucket is exhausted, not when the cap is reached — so
+            # the only price is on the buckets that actually need it, which
+            # are precisely the ones whose numbers matter most.
+            maxPages: 600
         # Ordered after the inventory rather than parallel to it: this is by
         # far the more expensive sweep, and there is no point paying to
         # enumerate every version of every bucket when the cheap pass over

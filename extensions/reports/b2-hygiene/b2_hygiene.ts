@@ -21,12 +21,27 @@
  * @module
  */
 
+/**
+ * What a report returns — swamp's documented `ReportResult` shape.
+ *
+ * Declared and applied to `execute` deliberately. Without it TypeScript infers
+ * a union of the early-return skip object and the full result, and every
+ * `out.json.<field>` access in a test fails to compile — which is exactly what
+ * happened here: `deno test` aborted at type-check, so this file's tests
+ * silently never ran despite passing under `--no-check`. Annotating the return
+ * collapses the union to the interface swamp actually contracts for.
+ */
+export type ReportResult = {
+  markdown: string;
+  json: Record<string, unknown>;
+};
+
 /** Severity ordering used for sorting and for the summary counts. */
-const SEVERITY_ORDER = ["critical", "high", "medium", "low"] as const;
-type Severity = typeof SEVERITY_ORDER[number];
+export const SEVERITY_ORDER = ["critical", "high", "medium", "low"] as const;
+export type Severity = typeof SEVERITY_ORDER[number];
 
 /** One audit finding about one B2 object. */
-type Finding = {
+export type Finding = {
   severity: Severity;
   /** Stable kebab-case identifier, safe to alert or filter on. */
   code: string;
@@ -292,6 +307,25 @@ export function renderMarkdown(
     .join(", ");
   lines.push(`**${findings.length} finding(s):** ${summary}.`, "");
 
+  lines.push(...renderFindingSections(findings));
+
+  return lines.join("\n");
+}
+
+/**
+ * Render findings grouped into severity sections.
+ *
+ * Extracted so the workflow-scope companion report renders findings the same
+ * way rather than drifting its own copy — `extra` is its hook for appending a
+ * per-finding line (the byte cost) without duplicating the section structure.
+ * When `extra` is omitted the output is byte-identical to what this produced
+ * inline, which is what keeps the published method-scope report unchanged.
+ */
+export function renderFindingSections(
+  findings: Finding[],
+  extra?: (f: Finding) => string | null,
+): string[] {
+  const lines: string[] = [];
   for (const sev of SEVERITY_ORDER) {
     const group = findings.filter((f) => f.severity === sev);
     if (group.length === 0) continue;
@@ -305,10 +339,11 @@ export function renderMarkdown(
         `**Why it matters:** ${f.impact}`,
         "",
       );
+      const more = extra?.(f);
+      if (more) lines.push(more, "");
     }
   }
-
-  return lines.join("\n");
+  return lines;
 }
 
 /**
@@ -325,7 +360,7 @@ export const report = {
   scope: "method" as const,
   labels: ["audit", "security", "cost", "backblaze", "b2"],
   // deno-lint-ignore no-explicit-any
-  execute: async (context: any) => {
+  execute: async (context: any): Promise<ReportResult> => {
     // Only b2-account's scan produces the inventory this audits. Anything else
     // gets an explicit no-op rather than a misleading empty clean bill.
     if (context.methodName !== "scan") {

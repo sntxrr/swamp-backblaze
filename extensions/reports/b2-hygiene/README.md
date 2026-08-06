@@ -1,12 +1,23 @@
 # @sntxrr/b2-hygiene
 
-A **read-only** fleet audit for Backblaze B2. It runs after
-`@sntxrr/b2/account`'s `scan` and turns the raw inventory into findings, ordered
-most severe first.
+A **read-only** fleet audit for Backblaze B2, in two reports:
 
-It never calls B2. It reads only the resource snapshots the scan already wrote,
-so it costs no transactions, cannot mutate anything, and is safe to run on a
-schedule.
+| Report                     | Scope      | Answers                                     |
+| -------------------------- | ---------- | ------------------------------------------- |
+| `@sntxrr/b2/hygiene`       | `method`   | Which buckets and keys are misconfigured?   |
+| `@sntxrr/b2/fleet-hygiene` | `workflow` | …and what is each of those gaps costing?    |
+
+Neither ever calls B2. Both read only resource snapshots that were already
+written, so they cost no transactions, cannot mutate anything, and are safe to
+run on a schedule.
+
+**Which one you want.** `b2/hygiene` runs after a single `@sntxrr/b2/account`
+`scan` and is enough on its own. `b2/fleet-hygiene` runs after a *workflow* that
+also ran an `@sntxrr/b2/files` scan, and joins the two: same findings, ranked by
+how much data fixing each one actually recovers. The split is not stylistic — a
+method-scope report only ever sees the resources its own execution produced, and
+the byte totals live in a different model's. Workflow scope is the only place
+the two can meet.
 
 ## Why
 
@@ -105,13 +116,93 @@ Always branch on `inventoryComplete` before acting on `findingCount` — a zero
 count from a truncated scan means "nothing found in the part we looked at", not
 "nothing wrong".
 
-## What it does not do
+## `@sntxrr/b2/fleet-hygiene` — the same findings, priced
 
-It does not size the cost. Knowing a bucket keeps hidden versions forever is not
-the same as knowing how many bytes that is — that needs per-prefix object counts
-from `@sntxrr/b2/files` (wave 2). Until then this tells you *which* buckets are
-bleeding, not *how much*.
+Attach it to the **workflow**, not to a model — it is workflow-scope:
 
-It also does not remediate. Fixing a lifecycle gap is a `b2-bucket update`, and
-revoking an over-scoped key must not happen until a restore has been proven from
-the backups that key protects.
+```yaml
+# workflows/b2-fleet-audit.yaml
+reports:
+  require:
+    - '@sntxrr/b2/fleet-hygiene'
+```
+
+The workflow needs two steps: an `@sntxrr/b2/account` `scan` and an
+`@sntxrr/b2/files` `scan`. The report finds them by the **specs they wrote**
+(`bucket`/`account` and `aggregate`), never by step or model name, so renaming a
+step does not break it.
+
+```bash
+swamp workflow run b2-fleet-audit
+swamp report get @sntxrr/b2/fleet-hygiene --workflow b2-fleet-audit --markdown
+```
+
+It adds a worklist ordered by recoverable bytes rather than by severity, because
+24 identical `lifecycle-no-hidden-version-pruning` findings tell you nothing
+about where to start:
+
+```
+| bucket                | finding                               | non-current | waste |
+| example-example-alpha-debian | `lifecycle-no-hidden-version-pruning` | 20.57 GiB   | 92%   |
+| example-example-beta-ubuntu   | `lifecycle-no-hidden-version-pruning` | 12.30 GiB   | 73%   |
+| example-host-ubuntu   | `lifecycle-no-hidden-version-pruning` | 155 B       | 20%   |
+```
+
+Those proportions are real, from a 24-bucket fleet: two buckets held 33 of the
+39.64 GiB. The last row is there on purpose — units scale down to bytes, because
+a fixed `GiB` format rendered five real buckets as `0.00 GiB`, and a report that
+refuses to show an unknown as zero must not show a known quantity as zero
+either.
+
+### A byte total has four states, and three of them are not zero
+
+This is the report's central contract. Every bucket is exactly one of:
+
+| State          | Means                                                       |
+| -------------- | ----------------------------------------------------------- |
+| `measured`     | A complete versions listing. The number is real.            |
+| `truncated`    | Listing hit `maxPages`. The number is a **FLOOR**.          |
+| `unmeasurable` | The scan listed *names*, which cannot see a non-current version. |
+| `unmeasured`   | No aggregate covered this bucket at all.                    |
+
+The last three are unknowns and are never rendered, summed, or exported as `0`.
+`unmeasurable` and `unmeasured` buckets are excluded from the fleet total
+**entirely — including their known current bytes**, because contributing one
+half of a bucket's numbers would shrink the apparent waste ratio. Understating
+the debt is the one direction this must never fail in.
+
+Branch on `sizingComplete` — deliberately separate from `inventoryComplete`,
+since the inventory can be whole while the sizing over it is a floor:
+
+```json
+{
+  "inventoryComplete": true,
+  "sizingComplete": true,
+  "totals": {
+    "measuredBuckets": 24, "truncatedBuckets": 0,
+    "unmeasurableBuckets": 0, "unmeasuredBuckets": 0,
+    "nonCurrentBytes": 42561501224, "isFloor": false,
+    "estimatedMonthlyUsd": 0.2554
+  },
+  "rate": { "usdPerGbMonth": 0.006, "observed": "2026-08" }
+}
+```
+
+**Set `maxPages` high enough on the b2-files step.** The default of 50 truncates
+past ~500k versions, which silently capped the six largest buckets on the first
+live run. The bundled workflow passes `maxPages: 600`. A truncated bucket taints
+the whole fleet total (`isFloor: true`), and the report says so above every
+number rather than below it.
+
+### The dollar figure is an estimate, and says so
+
+`estimatedMonthlyUsd` applies a **published list price** — $0.006/GB-month,
+observed 2026-08, exported as `rate` — to the non-current bytes. It is not a
+reading of your invoice, it bills in decimal GB as B2 does (not GiB), and it
+covers storage only. Verify it against current B2 pricing before acting on it.
+
+## What neither does
+
+Neither remediates. Fixing a lifecycle gap is a `b2-bucket update`, and revoking
+an over-scoped key must not happen until a restore has been proven from the
+backups that key protects.
