@@ -1,7 +1,7 @@
 {
   "extension": "@sntxrr/b2-hygiene",
   "version": "2026.08.06.1",
-  "reviewedAt": "2026-08-06T17:23:00Z",
+  "reviewedAt": "2026-08-07T02:38:00Z",
   "dimensions": [
     {
       "id": "credentials-secrets",
@@ -41,7 +41,7 @@
     {
       "id": "published-surface-hygiene",
       "verdict": "pass",
-      "note": "Every fixture and README example uses example.com-class names and fake-but-plausible B2 identifiers (example-host-ubuntu, b00000000000000000000001, 0021a2b3c4d5e6f0000000001). Checked with deliberate care this round, because the work involved reading two live fleet reports full of real bucket names and it is exactly the moment one gets pasted into a fixture: the source, the tests and the manifest contain no real bucket name. One correction was made during this review: a first draft of the README quoted its worked worklist using REAL bucket names lifted straight from the live run. Harmless in isolation — they are private-bucket names disclosing no credential or endpoint — but inconsistent with this repo's own standard, which is that published surfaces carry counts and proportions but never real identifiers (the existing README says '0 of 24 buckets', not which 24). Rewritten to example-prefixed names, keeping the real proportions, which is what actually carries the argument. Worth recording because the moment of danger is specific and repeatable: it is while reading live output that a real name gets pasted into a doc."
+      "note": "Every fixture and README example uses example.com-class names and fake-but-plausible B2 identifiers. This dimension was re-audited mechanically before publishing rather than by eye, because the work involved reading live fleet output full of real bucket names: every real bucket name and bucket ID in the account was extracted from the live inventory and grepped against each file that actually ships (the two report sources, the README, the LICENSE and the manifest). Result: zero. Two defects were found and fixed by that audit. First, an earlier draft of this README quoted real bucket names outright; it was rewritten to example-prefixed names, but those names were still the real ones with a prefix bolted on — 'example-example-alpha-debian' contains 'example-alpha-debian' — so a substring search still matched. They are now fully fictional (example-alpha-debian, example-beta-ubuntu) with only the real proportions retained, which is what carries the argument anyway. Second, the sibling b2-files review reports named a real bucket in prose; sanitised. The lesson is that 'example-' is not sanitisation when the remainder is the secret, and that the moment of danger is specific and repeatable: writing docs while reading live output."
     }
   ]
 }

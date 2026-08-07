@@ -151,8 +151,8 @@ about where to start:
 
 ```
 | bucket                | finding                               | non-current | waste |
-| example-example-alpha-debian | `lifecycle-no-hidden-version-pruning` | 20.57 GiB   | 92%   |
-| example-example-beta-ubuntu   | `lifecycle-no-hidden-version-pruning` | 12.30 GiB   | 73%   |
+| example-alpha-debian  | `lifecycle-no-hidden-version-pruning` | 20.57 GiB   | 92%   |
+| example-beta-ubuntu   | `lifecycle-no-hidden-version-pruning` | 12.30 GiB   | 73%   |
 | example-host-ubuntu   | `lifecycle-no-hidden-version-pruning` | 155 B       | 20%   |
 ```
 
