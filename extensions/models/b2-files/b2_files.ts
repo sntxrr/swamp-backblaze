@@ -1501,7 +1501,7 @@ export function assertComplianceAllowed(
  */
 export const model = {
   type: "@sntxrr/b2/files",
-  version: "2026.08.05.1",
+  version: "2026.08.06.1",
   globalArguments: GlobalArgsSchema,
   resources: {
     "aggregate": {
@@ -2255,31 +2255,34 @@ export const model = {
         return errors.length > 0 ? { pass: false, errors } : { pass: true };
       },
     },
-    "file-destruction-acknowledged": {
-      description:
-        "Refuse to run delete without allowFileDestruction. NOTE: this catches the global-argument path only — swamp does not give checks the method's inputs, so `--input allowFileDestruction=true` is invisible here and the real enforcement lives inside delete and hide. This check exists to fail fast, before any B2 call, when the model itself is not configured to destroy anything. It cannot fire for `hide` at all: pre-flight checks run only for methods named create/update/delete/action.",
-      labels: ["policy"],
-      appliesTo: ["delete"],
-      // deno-lint-ignore require-await
-      execute: async (
-        context: { globalArgs: GlobalArgs },
-      ): Promise<{ pass: boolean; errors?: string[] }> => {
-        const g = context.globalArgs;
-        if (g.allowFileDestruction) return { pass: true };
-        return {
-          pass: false,
-          errors: [
-            `Model for bucket "${
-              g.bucketName ?? "(unset)"
-            }" does not set allowFileDestruction, and delete permanently ` +
-            `removes a stored file version. Deleting a restic pack file ` +
-            `leaves the repository unreadable with no error until the next ` +
-            `restore. Acknowledge it with --input allowFileDestruction=true ` +
-            `for a single run, or set allowFileDestruction=true on the model.`,
-          ],
-        };
-      },
-    },
+    // THERE IS DELIBERATELY NO "file-destruction-acknowledged" PRE-FLIGHT
+    // CHECK. One shipped in 2026.08.05.1 and was removed in 2026.08.06.1.
+    //
+    // swamp does not pass a method's inputs to its checks, so the check could
+    // only ever read globalArgs. That made `--input allowFileDestruction=true`
+    // — the acknowledgement its own error message told you to pass — invisible
+    // to it, and the run was rejected before `execute` ever saw the flag.
+    // Verified against the published version, not merely reasoned about.
+    //
+    // The consequence was worse than a self-contradicting message. With the
+    // per-run path blocked, the ONLY way to delete anything was to set
+    // allowFileDestruction: true permanently on the model definition — so a
+    // check written to prevent accidental destruction was in practice forcing
+    // operators to arm destruction for good, on a model whose delete can
+    // corrupt a restic repository. It failed on the safe configuration and
+    // passed on the dangerous one.
+    //
+    // The real gate is assertDestructionAllowed inside `delete` and `hide`,
+    // which sees BOTH the method input and the global argument, runs before any
+    // B2 call, and is covered by tests for each path. Note it also covers
+    // `hide`, which no pre-flight check could ever guard: checks run only for
+    // methods named create/update/delete/action.
+    //
+    // The test that accompanied this check asserted its behaviour was correct,
+    // so the suite encoded the bug rather than catching it — the same failure
+    // as the wave-1 unprunedPrefixes test. Its replacement asserts the
+    // property that actually matters: no check may block delete for want of
+    // the acknowledgement. Do not re-add it.
     "single-bucket-for-file-methods": {
       description:
         "delete and update act on one file in one bucket, so globalArgs.bucketName must be set. Only scan may leave it unset, and then it inventories every bucket the key can see.",

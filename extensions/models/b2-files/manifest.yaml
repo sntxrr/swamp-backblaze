@@ -1,7 +1,7 @@
 manifestVersion: 1
 
 name: "@sntxrr/b2-files"
-version: "2026.08.05.1"
+version: "2026.08.06.1"
 description: "Inventory and manage Backblaze B2 file versions via the Native API v4 — an aggregate scan that separates current bytes from the non-current versions a bucket with no hidden-version lifecycle rule pays for forever, plus sync, copy, and gated hide, delete and Object Lock updates."
 repository: "https://github.com/sntxrr/swamp-backblaze"
 

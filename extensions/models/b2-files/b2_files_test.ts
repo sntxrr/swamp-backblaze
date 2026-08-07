@@ -2130,26 +2130,38 @@ Deno.test("credentials-present fails on an empty application key", async () => {
   assertStringIncludes(result.errors?.join(" ") ?? "", "vault.get");
 });
 
-Deno.test("file-destruction-acknowledged gates the global-argument path", async () => {
-  const check = model.checks["file-destruction-acknowledged"];
-  assertEquals(check.appliesTo, ["delete"]);
-  const blocked = await check.execute({
-    globalArgs: _internal.GlobalArgsSchema.parse({
-      applicationKeyId: "id",
-      applicationKey: APPLICATION_KEY,
-      bucketName: BUCKET_NAME,
-    }),
+Deno.test("no pre-flight check may block delete for want of the acknowledgement", async () => {
+  // Replaces a test that asserted the OPPOSITE and so encoded the bug as
+  // correct — the same failure as the wave-1 unprunedPrefixes test.
+  //
+  // A check can only ever see globalArgs; swamp does not pass method inputs to
+  // checks. So a check gating on allowFileDestruction rejects
+  // `--input allowFileDestruction=true` before execute runs, while its error
+  // message instructs the operator to pass exactly that. Worse, it leaves
+  // setting the flag permanently on the model as the only way to delete
+  // anything — arming destruction for good on a model whose delete can corrupt
+  // a restic repository. Verified against the published 2026.08.05.1.
+  //
+  // A well-configured model — bucket pinned, destruction NOT pre-authorised —
+  // must pass every check, so the per-run acknowledgement can reach execute.
+  const globalArgs = _internal.GlobalArgsSchema.parse({
+    applicationKeyId: "id",
+    applicationKey: APPLICATION_KEY,
+    bucketName: BUCKET_NAME,
   });
-  assertFalse(blocked.pass);
-  const allowed = await check.execute({
-    globalArgs: _internal.GlobalArgsSchema.parse({
-      applicationKeyId: "id",
-      applicationKey: APPLICATION_KEY,
-      bucketName: BUCKET_NAME,
-      allowFileDestruction: true,
-    }),
-  });
-  assert(allowed.pass);
+  for (const [name, check] of Object.entries(model.checks)) {
+    // Not every check declares appliesTo — one that omits it runs everywhere,
+    // so an absent value must be treated as "applies to delete too".
+    const applies = (check as { appliesTo?: string[] }).appliesTo ?? ["delete"];
+    if (!applies.includes("delete")) continue;
+    const result = await check.execute({ globalArgs });
+    assert(
+      result.pass,
+      `check "${name}" blocks delete on a model that has not pre-authorised ` +
+        `destruction, so --input allowFileDestruction=true can never reach ` +
+        `execute: ${JSON.stringify(result.errors)}`,
+    );
+  }
 });
 
 Deno.test("single-bucket-for-file-methods requires a bucket for delete and update", async () => {

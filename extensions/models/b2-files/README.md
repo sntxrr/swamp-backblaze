@@ -145,13 +145,34 @@ shortened or removed — not by the account owner, not by support — so the obj
 is stored and billed until it expires even if setting it was a mistake. Use
 `governance` when you want a lock you can undo.
 
-> **The enforcement lives in the methods, not only in the pre-flight checks.**
-> swamp gives a check the model's global arguments but never the method's
-> inputs, so a check cannot see `--input fileName=…` and cannot be the thing
-> that stops the run. The checks exist to fail fast, before any B2 call, when
-> the model itself is misconfigured. Note also that pre-flight checks fire only
-> for methods named `create` / `update` / `delete` / `action`, so no check can
-> ever guard `hide` — its gate is inside `execute`.
+> **The enforcement lives in the methods, and deliberately not in a pre-flight
+> check.** swamp gives a check the model's global arguments but never the
+> method's inputs, so a check cannot see `--input allowFileDestruction=true`
+> and cannot be the thing that stops — or permits — the run. Pre-flight checks
+> also fire only for methods named `create` / `update` / `delete` / `action`,
+> so no check could ever guard `hide` regardless.
+
+### Changed in 2026.08.06.1 — the `file-destruction-acknowledged` check is gone
+
+Version `2026.08.05.1` shipped a `file-destruction-acknowledged` pre-flight
+check, and it made `delete` unusable as documented. Because a check sees only
+global arguments, it rejected `--input allowFileDestruction=true` **before**
+`execute` ever received the flag — while its own error message instructed you
+to pass exactly that.
+
+The consequence was worse than a self-contradicting message. With the per-run
+path blocked, the only way to delete anything was to set
+`allowFileDestruction: true` **permanently** on the model — so a check written
+to prevent accidental destruction was forcing you to arm destruction for good,
+on a model whose `delete` can corrupt a restic repository. It failed on the
+safe configuration and passed on the dangerous one.
+
+The check is removed. `assertDestructionAllowed` inside `delete` and `hide` is
+unchanged and still refuses without the acknowledgement — it simply now sees
+both the method input and the global argument, as it always should have. **No
+behaviour you relied on is lost:** if you had set `allowFileDestruction` on the
+model to work around this, it still works, and you can now drop it and
+acknowledge per run instead.
 
 ## Quick start
 
