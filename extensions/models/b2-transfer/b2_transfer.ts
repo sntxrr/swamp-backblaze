@@ -627,17 +627,44 @@ const ListPartsArgsSchema = z.object({
 });
 
 /** Arguments for `copy_part`. */
+/**
+ * Arguments for `copy_part` — server-side assembly of a new file.
+ *
+ * This method took `largeFileId` and `partNumber` at first, mirroring
+ * `b2_copy_part` one-for-one. Exercising it against real B2 proved that
+ * unusable: `b2_copy_part` needs an **in-progress** large file, and nothing in
+ * this model hands one out. `upload` starts and finishes atomically, so its
+ * result is a completed file that `b2_copy_part` rejects with "No active upload
+ * for", and `scan` only ever finds unfinished uploads that already exist. On a
+ * healthy account there was no way to obtain a valid `largeFileId` at all.
+ *
+ * So the method now owns the whole lifecycle — start, copy each source, finish
+ * — the same shape `upload` already uses for its large-file path. That makes it
+ * a working operation ("build a file server-side from ranges of existing
+ * files") rather than a call nobody can reach, and it cannot strand an
+ * unfinished large file the way a half-exposed API would.
+ */
 const CopyPartArgsSchema = z.object({
-  sourceFileId: z.string().min(1).describe("File ID to copy bytes from."),
-  largeFileId: z.string().min(1).describe(
-    "The in-progress large file to copy into, from b2_start_large_file.",
+  fileName: z.string().min(1).describe(
+    "Name of the new file to assemble in this model's bucket.",
   ),
-  partNumber: z.number().int().min(1).max(10000).describe(
-    "Which part this becomes, 1-10000.",
+  sources: z.array(z.object({
+    sourceFileId: z.string().min(1).describe("File ID to copy bytes from."),
+    range: z.string().optional().describe(
+      'Byte range of the source to copy, e.g. "bytes=0-4999999". Omit to ' +
+        "copy the whole source file.",
+    ),
+  })).min(1).max(10000).describe(
+    "Sources to concatenate, in order — each becomes one part. B2 requires " +
+      "every part EXCEPT THE LAST to be at least 5,000,000 bytes, so a " +
+      "small range is only valid as the final source.",
   ),
-  range: z.string().optional().describe(
-    'Byte range of the source to copy, e.g. "bytes=0-4999999". Omit to copy ' +
-      "the whole source file.",
+  contentType: z.string().optional().describe(
+    'MIME type for the assembled file. Defaults to "b2/x-auto".',
+  ),
+  fileInfo: z.record(z.string(), z.string()).optional().describe(
+    "Custom metadata to attach. Stored by B2 and returned on every read, so " +
+      "never put a credential here.",
   ),
 });
 
@@ -1956,10 +1983,13 @@ export const model = {
     },
     "copy_part": {
       description:
-        "Copy a byte range from an existing file into a part of an " +
-        "in-progress large file (b2_copy_part), server-side — no bytes move " +
-        "through this process, so maxTransferBytes does not apply. Requires " +
-        "writeFiles and readFiles.",
+        "Assemble a new file server-side from byte ranges of existing files " +
+        "(b2_start_large_file + b2_copy_part per source + " +
+        "b2_finish_large_file). No bytes pass through this process, so " +
+        "maxTransferBytes does not apply and a multi-gigabyte copy costs " +
+        "nothing locally. Every part except the last must be at least " +
+        "5,000,000 bytes. A failure cancels the half-built file rather than " +
+        "leaving it billed. Requires writeFiles and readFiles.",
       arguments: CopyPartArgsSchema,
       execute: async (
         args: z.infer<typeof CopyPartArgsSchema>,
@@ -1967,56 +1997,125 @@ export const model = {
       ): Promise<{ dataHandles: Array<{ name: string }> }> => {
         const { globalArgs: g, logger } = context;
         const { auth, reauth } = await session(g);
-        const bucketName = g.bucketName ?? "";
+        const bucket = await requireBucket(auth, g, reauth);
 
         const startedMs = Date.now();
-        const payload: Record<string, unknown> = {
-          sourceFileId: args.sourceFileId,
-          largeFileId: args.largeFileId,
-          partNumber: args.partNumber,
-        };
-        if (args.range) payload.range = args.range;
-        const part = await b2Fetch<B2Part>(
+        const started = await b2Fetch<B2File>(
           auth,
           "POST",
-          "b2_copy_part",
-          payload,
+          "b2_start_large_file",
+          {
+            bucketId: bucket.bucketId,
+            fileName: args.fileName,
+            contentType: args.contentType ?? "b2/x-auto",
+            fileInfo: args.fileInfo ?? {},
+          },
           reauth,
         );
+        const largeFileId = started.fileId;
+        if (!largeFileId) {
+          throw new Error(
+            "b2_start_large_file returned no fileId, so there is nothing to " +
+              "copy parts into and nothing to cancel.",
+          );
+        }
+
+        let finished: B2File;
+        let copiedBytes: number | null = 0;
+        try {
+          const hashes: string[] = [];
+          for (let i = 0; i < args.sources.length; i++) {
+            const src = args.sources[i];
+            const payload: Record<string, unknown> = {
+              sourceFileId: src.sourceFileId,
+              largeFileId,
+              partNumber: i + 1,
+            };
+            if (src.range) payload.range = src.range;
+            const part = await b2Fetch<B2Part>(
+              auth,
+              "POST",
+              "b2_copy_part",
+              payload,
+              reauth,
+            );
+            // B2 computes the part's SHA-1 server-side and returns it;
+            // b2_finish_large_file needs them all, in order.
+            hashes.push(String(part.contentSha1 ?? ""));
+            // Null-propagating, as everywhere else: a part whose length B2 did
+            // not report makes the total unknown rather than smaller.
+            if (
+              copiedBytes !== null && typeof part.contentLength === "number"
+            ) {
+              copiedBytes += part.contentLength;
+            } else {
+              copiedBytes = null;
+            }
+            logger.info(
+              "Copied part {partNumber} of {fileName} from {sourceFileId}",
+              {
+                partNumber: i + 1,
+                fileName: args.fileName,
+                sourceFileId: src.sourceFileId,
+              },
+            );
+          }
+          finished = await b2Fetch<B2File>(
+            auth,
+            "POST",
+            "b2_finish_large_file",
+            { fileId: largeFileId, partSha1Array: hashes },
+            reauth,
+          );
+        } catch (e) {
+          // Identical reasoning to uploadLarge: a large file left unfinished is
+          // billed for its parts indefinitely and is invisible in the console's
+          // file browser. Best-effort, and its own failure must not mask the
+          // real error.
+          try {
+            await b2Fetch(auth, "POST", "b2_cancel_large_file", {
+              fileId: largeFileId,
+            }, reauth);
+            logger.warn(
+              "Assembly of {fileName} failed; cancelled large file {fileId} " +
+                "so its parts are not billed",
+              { fileName: args.fileName, fileId: largeFileId },
+            );
+          } catch {
+            logger.warn(
+              "Assembly of {fileName} failed AND cancelling large file " +
+                "{fileId} also failed — its copied parts are still stored and " +
+                "still billed. Cancel it with: swamp model method run <model> " +
+                "delete --input fileId={fileId}",
+              { fileName: args.fileName, fileId: largeFileId },
+            );
+          }
+          throw e;
+        }
         const durationMs = Date.now() - startedMs;
 
-        const resource = toTransferResource(
-          {
-            fileId: part.fileId ?? args.largeFileId,
-            fileName: `part-${args.partNumber}`,
-            contentSha1: part.contentSha1 ?? null,
-            bucketId: g.bucketId,
-          },
-          {
-            direction: "copy_part",
-            mode: "copy_part",
-            bucketName,
-            bucketId: g.bucketId ?? null,
-            fileName: `part-${args.partNumber}`,
-            bytes: typeof part.contentLength === "number"
-              ? part.contentLength
-              : null,
-            // Server-side copy: no local bytes exist to hash, so there is
-            // nothing to verify. Null, never false.
-            sha1Verified: null,
-            partCount: null,
-            durationMs,
-            observedAt: new Date().toISOString(),
-          },
-        );
+        const resource = toTransferResource(finished, {
+          direction: "copy_part",
+          mode: "copy_part",
+          bucketName: bucket.bucketName,
+          bucketId: bucket.bucketId,
+          fileName: args.fileName,
+          bytes: copiedBytes,
+          // Server-side copy: no local bytes exist to hash, so there is nothing
+          // to verify. Null, never false.
+          sha1Verified: null,
+          partCount: args.sources.length,
+          durationMs,
+          observedAt: new Date().toISOString(),
+        });
         logger.info(
-          "Copied part {partNumber} into large file {largeFileId}",
-          { partNumber: args.partNumber, largeFileId: args.largeFileId },
+          "Assembled {fileName} from {n} source range(s), server-side",
+          { fileName: args.fileName, n: args.sources.length },
         );
         const name = transferInstanceName(
           "copy_part",
-          bucketName || "by-id",
-          `${args.largeFileId}-${args.partNumber}`,
+          bucket.bucketName,
+          args.fileName,
         );
         return {
           dataHandles: [

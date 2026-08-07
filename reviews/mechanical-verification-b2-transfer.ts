@@ -211,9 +211,8 @@ const CASES: Array<[string, Record<string, unknown>, Record<string, unknown>]> =
     ["authorize_download", { fileNamePrefix: "data/", verify: false }, {}],
     ["list_parts", { fileId: LARGE_FILE_ID }, {}],
     ["copy_part", {
-      sourceFileId: "4_zx",
-      largeFileId: LARGE_FILE_ID,
-      partNumber: 1,
+      fileName: "assembled.bin",
+      sources: [{ sourceFileId: "4_zx", range: "bytes=0-4999999" }],
     }, {}],
     ["delete", { fileId: LARGE_FILE_ID, allowTransferDestruction: true }, {}],
   ];

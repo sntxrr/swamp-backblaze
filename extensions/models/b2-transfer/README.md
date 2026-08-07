@@ -39,7 +39,7 @@ these methods. This one says no.
 | `download`           | `b2_download_file_by_id` **or** `b2_download_file_by_name`                       | no      |
 | `authorize_download` | `b2_get_download_authorization`                                                  | no      |
 | `list_parts`         | `b2_list_parts`                                                                  | no      |
-| `copy_part`          | `b2_copy_part`                                                                   | **yes** |
+| `copy_part`          | `b2_start_large_file`, `b2_copy_part` per source, `b2_finish_large_file`         | **yes** |
 | `delete`             | `b2_cancel_large_file`                                                           | **yes** |
 
 `delete` is idempotent, but not for the reason B2's error table suggests.
@@ -48,6 +48,38 @@ Cancelling an already-cancelled large file returns neither `404` nor
 `No active upload for large file (...)`. This model matches the code **and**
 that specific message; any other `bad_request` still throws, so a malformed
 request is never mistaken for a no-op.
+
+## `copy_part` assembles a file server-side
+
+Give it a destination name and an ordered list of sources; each becomes one
+part, and B2 copies the bytes internally:
+
+```yaml
+# copy-args.yaml
+fileName: assembled.bin
+sources:
+  - sourceFileId: "4_z...first"
+    range: "bytes=0-4999999"
+  - sourceFileId: "4_z...second"
+```
+
+```bash
+swamp model method run b2-canary copy_part --input-file copy-args.yaml
+```
+
+**Every part except the last must be at least 5,000,000 bytes** — B2's minimum.
+A small range is only valid as the final source.
+
+It owns the whole lifecycle (start, copy each source, finish) rather than
+exposing `b2_copy_part` alone, and that is a correction rather than a
+convenience. The first version took a `largeFileId` and a `partNumber`, mirroring
+the B2 call one-for-one — and was **unreachable**. `b2_copy_part` requires an
+*in-progress* large file, but `upload` starts and finishes atomically, so its
+result is a completed file that B2 rejects with `No active upload for`, and
+`scan` only finds unfinished uploads that already exist. On a healthy account
+there was no way to obtain a valid `largeFileId` at all. A failure cancels the
+half-built file, so this cannot create the invisible billed waste `scan` exists
+to find.
 
 ## Required B2 capabilities
 
@@ -65,7 +97,7 @@ A scoped key missing a capability fails with `401 unauthorized`, which is **not
 transient** — do not retry it. The fix is the key's grant.
 
 Every method addressed purely by `fileId` — `download` by ID, `list_parts`,
-`copy_part`, `delete` — deliberately performs **no** bucket lookup, so a
+`delete` — deliberately performs **no** bucket lookup, so a
 bucket-restricted key with no `listBuckets` capability can still use them.
 
 ## Quick start
@@ -151,7 +183,8 @@ to catch.
 **per unfinished file**, which is why it is opt-in.
 
 `copy_part` is server-side: no bytes pass through this process, so
-`maxTransferBytes` does not apply to it.
+`maxTransferBytes` does not apply to it. Assembling a 40 GB file from ranges
+costs nothing locally.
 
 ## Safety
 

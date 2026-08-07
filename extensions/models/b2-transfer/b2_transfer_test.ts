@@ -1111,24 +1111,108 @@ Deno.test("a truncated part listing marks the count a floor and warns", async ()
   }
 });
 
-Deno.test("copy_part records no sha1 verdict, because nothing was hashed locally", async () => {
+const COPY_ROUTES = {
+  b2_list_buckets: bucketsBody(),
+  b2_start_large_file: fileBody({ fileId: LARGE_FILE_ID, contentSha1: "none" }),
+  b2_copy_part: { fileId: LARGE_FILE_ID, partNumber: 1, contentLength: 900 },
+  b2_finish_large_file: fileBody({
+    fileName: "assembled.bin",
+    contentSha1: "none",
+  }),
+};
+
+Deno.test("copy_part owns the whole lifecycle: start, copy each source, finish", async () => {
+  // The original took a largeFileId and a partNumber, mirroring b2_copy_part
+  // one-for-one — and was UNREACHABLE, because nothing in this model hands out
+  // an in-progress large file. Live B2 rejected the only id available (a
+  // completed upload) with "No active upload for". Owning the lifecycle is what
+  // makes the method callable at all.
+  const { calls, restore } = installFetch(router(COPY_ROUTES));
+  try {
+    const { context, written } = makeContext();
+    await model.methods.copy_part.execute({
+      fileName: "assembled.bin",
+      sources: [
+        { sourceFileId: "4_zexamplefileid0000000001", range: "bytes=0-4999999" },
+        { sourceFileId: "4_zexamplefileid0000000002" },
+      ],
+    }, context);
+    const ops = calls.map((c) => c.op);
+    assertEquals(ops.filter((o) => o === "b2_start_large_file").length, 1);
+    assertEquals(ops.filter((o) => o === "b2_copy_part").length, 2);
+    assertEquals(ops.filter((o) => o === "b2_finish_large_file").length, 1);
+    assertEquals(written[0].data.direction, "copy_part");
+    assertEquals(written[0].data.partCount, 2);
+    assertEquals(written[0].data.bytes, 1800);
+    // Nothing was hashed locally, so there is no verdict to claim.
+    assertEquals(written[0].data.sha1Verified, null);
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("copy_part numbers its parts from the source order", async () => {
+  const { calls, restore } = installFetch(router(COPY_ROUTES));
+  try {
+    const { context } = makeContext();
+    await model.methods.copy_part.execute({
+      fileName: "assembled.bin",
+      sources: [
+        { sourceFileId: "a" },
+        { sourceFileId: "b" },
+        { sourceFileId: "c" },
+      ],
+    }, context);
+    const parts = calls.filter((c) => c.op === "b2_copy_part")
+      .map((c) => JSON.parse(c.body as string));
+    assertEquals(parts.map((p) => p.partNumber), [1, 2, 3]);
+    assertEquals(parts.map((p) => p.sourceFileId), ["a", "b", "c"]);
+    // The range is optional per source and must be omitted, not sent as null.
+    assertFalse("range" in parts[0]);
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("a failed copy_part cancels the half-built file", async () => {
+  // Otherwise it becomes exactly the invisible billed waste this model exists
+  // to find — created by the tool meant to clean it up.
   const { calls, restore } = installFetch(router({
-    b2_copy_part: { fileId: LARGE_FILE_ID, partNumber: 2, contentLength: 900 },
+    ...COPY_ROUTES,
+    b2_copy_part: json({ code: "bad_request", message: "nope" }, 400),
+    b2_cancel_large_file: { fileId: LARGE_FILE_ID },
+  }));
+  try {
+    const { context, logs } = makeContext();
+    await assertRejects(() =>
+      model.methods.copy_part.execute({
+        fileName: "assembled.bin",
+        sources: [{ sourceFileId: "a" }],
+      }, context)
+    );
+    assertEquals(
+      calls.filter((c) => c.op === "b2_cancel_large_file").length,
+      1,
+      "the half-built large file must be cancelled",
+    );
+    assert(logs.some((l) => l.includes("cancelled large file")));
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("copy_part propagates an unknown part length rather than under-counting", async () => {
+  const { restore } = installFetch(router({
+    ...COPY_ROUTES,
+    b2_copy_part: { fileId: LARGE_FILE_ID, partNumber: 1 },
   }));
   try {
     const { context, written } = makeContext();
-    await model.methods.copy_part.execute(
-      {
-        sourceFileId: "4_zexamplefileid0000000001",
-        largeFileId: LARGE_FILE_ID,
-        partNumber: 2,
-      },
-      context,
-    );
-    assertEquals(calls.filter((c) => c.op === "b2_list_buckets").length, 0);
-    assertEquals(written[0].data.sha1Verified, null);
-    assertEquals(written[0].data.direction, "copy_part");
-    assertEquals(written[0].data.bytes, 900);
+    await model.methods.copy_part.execute({
+      fileName: "assembled.bin",
+      sources: [{ sourceFileId: "a" }],
+    }, context);
+    assertEquals(written[0].data.bytes, null);
   } finally {
     restore();
   }
@@ -1354,6 +1438,9 @@ Deno.test("no method leaks a secret into a snapshot or a log line", async () => 
     b2_copy_part: { fileId: LARGE_FILE_ID, partNumber: 1, contentLength: 5 },
     b2_cancel_large_file: { fileId: LARGE_FILE_ID },
     b2_get_download_authorization: { authorizationToken: DOWNLOAD_AUTH_TOKEN },
+    // copy_part now owns the large-file lifecycle, so it reaches these too.
+    b2_start_large_file: fileBody({ fileId: LARGE_FILE_ID, contentSha1: "none" }),
+    b2_finish_large_file: fileBody({ contentSha1: "none" }),
   };
   const cases: Array<[string, Record<string, unknown>]> = [
     ["scan", {}],
@@ -1361,9 +1448,8 @@ Deno.test("no method leaks a secret into a snapshot or a log line", async () => 
     ["authorize_download", { fileNamePrefix: "data/", verify: false }],
     ["list_parts", { fileId: LARGE_FILE_ID }],
     ["copy_part", {
-      sourceFileId: "4_zx",
-      largeFileId: LARGE_FILE_ID,
-      partNumber: 1,
+      fileName: "assembled.bin",
+      sources: [{ sourceFileId: "4_zx" }],
     }],
     ["delete", { fileId: LARGE_FILE_ID, allowTransferDestruction: true }],
   ];
