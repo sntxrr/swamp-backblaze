@@ -5,6 +5,6 @@ name: b2-files-audit
 version: 1
 tags: {}
 globalArguments:
-  applicationKeyId: '${{ vault.get(onepassword, "Backblaze/backblaze-primary-key") }}'
-  applicationKey: '${{ vault.get(onepassword, "Backblaze/backblaze-primary-application-key") }}'
+  applicationKeyId: '${{ vault.get(onepassword, "Backblaze/b2-provisioner-key") }}'
+  applicationKey: '${{ vault.get(onepassword, "Backblaze/b2-provisioner-application-key") }}'
 methods: {}
