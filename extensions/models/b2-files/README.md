@@ -176,14 +176,19 @@ acknowledge per run instead.
 
 ## Quick start
 
+Use a scoped application key, not the Backblaze account master key. This model
+only lists and reads, so `listBuckets,listFiles,readFiles` is enough. A master
+key cannot be rotated by API — only regenerated in the web console — so putting
+it in a model makes the model unrotatable too.
+
 ```bash
 # 1. Store the application key (never inline it)
-swamp vault put onepassword Backblaze/backblaze-primary-application-key
+swamp vault put onepassword Backblaze/b2-provisioner-application-key
 
 # 2. Create a fleet-wide inventory model — bucketName deliberately unset
 swamp model create @sntxrr/b2/files b2-files \
-  --global-arg 'applicationKeyId=${{ vault.get(onepassword, "Backblaze/backblaze-primary-key") }}' \
-  --global-arg 'applicationKey=${{ vault.get(onepassword, "Backblaze/backblaze-primary-application-key") }}'
+  --global-arg 'applicationKeyId=${{ vault.get(onepassword, "Backblaze/b2-provisioner-key") }}' \
+  --global-arg 'applicationKey=${{ vault.get(onepassword, "Backblaze/b2-provisioner-application-key") }}'
 
 # 3. Size the debt
 swamp model method run b2-files scan --input groupBy=topLevel
