@@ -1503,6 +1503,18 @@ export const model = {
   type: "@sntxrr/b2/files",
   version: "2026.08.06.1",
   globalArguments: GlobalArgsSchema,
+
+  // No-op baseline at the current version. It migrates nothing; it exists so
+  // an instance authored for an older typeVersion is stamped forward instead
+  // of stranded, and so the next version bump extends a chain rather than
+  // starting one. A real schema change adds its own entry after this one.
+  upgrades: [
+    {
+      toVersion: "2026.08.06.1",
+      description: "Baseline upgrade chain; migrates nothing.",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   resources: {
     "aggregate": {
       description:

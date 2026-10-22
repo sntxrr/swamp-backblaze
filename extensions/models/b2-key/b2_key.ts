@@ -272,6 +272,11 @@ type ExecuteContext<G> = {
     name: string,
     data: Record<string, unknown>,
   ) => Promise<{ name: string }>;
+  /** Prior snapshot of this model's resource; see loadPriorDelivery. */
+  readResource?: (
+    instanceName: string,
+    version?: number,
+  ) => Promise<Record<string, unknown> | null>;
 };
 
 // --- B2 capability vocabulary ----------------------------------------------
@@ -460,6 +465,7 @@ const KeySchema = z.object({
       "A property of the KEY, not of the run: sync and delete carry the value " +
       "forward rather than resetting it, because neither observes delivery.",
   ),
+  // swamp-quality-ignore credentials-sensitive-field: holds an op://vault/item/field pointer built by deliverSecret, never the key; tests assert the snapshot excludes the secret
   secretDestination: z.string().nullable().describe(
     "Where the secret was delivered (vault/item/field). Never contains the " +
       "secret itself. Carried forward by sync and delete — it is the only " +
@@ -931,6 +937,18 @@ export const model = {
     "Manage a Backblaze B2 application key via the Native API v4 — sync, create (with the one-shot secret delivered to 1Password Connect), and idempotent delete",
   version: "2026.08.05.3",
   globalArguments: GlobalArgsSchema,
+
+  // No-op baseline at the current version. It migrates nothing; it exists so
+  // an instance authored for an older typeVersion is stamped forward instead
+  // of stranded, and so the next version bump extends a chain rather than
+  // starting one. A real schema change adds its own entry after this one.
+  upgrades: [
+    {
+      toVersion: "2026.08.05.3",
+      description: "Baseline upgrade chain; migrates nothing.",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   resources: {
     "key": {
       description:
@@ -1164,9 +1182,14 @@ export const model = {
               observedAt: new Date().toISOString(),
             }),
           );
+          // connectFetch forwards Connect's response body verbatim. Connect is
+          // not known to echo submitted field values, but this message reaches
+          // the run log and report, so scrub the secret rather than trust it.
+          const reason = String((e as Error)?.message ?? e).split(secret)
+            .join("[redacted]");
           throw new Error(
             `B2 key ${newKeyId} was minted but its one-shot secret could NOT ` +
-              `be written to 1Password Connect: ${(e as Error).message}. The ` +
+              `be written to 1Password Connect: ${reason}. The ` +
               `secret is now unrecoverable — revoke this key immediately ` +
               `("delete" with managedKeyId=${newKeyId}) and re-run. The key ` +
               `has been recorded with secretDelivered=false so it is not lost.`,

@@ -1069,6 +1069,18 @@ export const model = {
   type: "@sntxrr/b2/bucket",
   version: "2026.08.05.3",
   globalArguments: GlobalArgsSchema,
+
+  // No-op baseline at the current version. It migrates nothing; it exists so
+  // an instance authored for an older typeVersion is stamped forward instead
+  // of stranded, and so the next version bump extends a chain rather than
+  // starting one. A real schema change adds its own entry after this one.
+  upgrades: [
+    {
+      toVersion: "2026.08.05.3",
+      description: "Baseline upgrade chain; migrates nothing.",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   resources: {
     "bucket": {
       description:
@@ -1557,7 +1569,16 @@ export const model = {
         return {
           pass: false,
           errors: [
-            `Bucket "${g.bucketName}": no lifecycleRules are declared as a GLOBAL ARGUMENT, and no prior snapshot proves the bucket deletes hidden file versions, so this run could leave restic-pruned data billed forever. Declare them with --global-arg 'lifecycleRules=${example}', run sync first to record the bucket's real state, or set allowUnprunedHiddenVersions=true to accept this. NOTE: a --input lifecycleRules=... on this run cannot satisfy this check — swamp gives pre-flight checks the model's global arguments but not the method's inputs, so the check cannot see it. The method itself still honours the input; it is only this safety gate that is blind to it.`,
+            `Bucket "${g.bucketName}": no lifecycleRules are declared as a GLOBAL ` +
+            `ARGUMENT, and no prior snapshot proves the bucket deletes hidden file ` +
+            `versions, so this run could leave restic-pruned data billed forever. ` +
+            `Declare them with --global-arg 'lifecycleRules=${example}', run sync ` +
+            `first to record the bucket's real state, or set ` +
+            `allowUnprunedHiddenVersions=true to accept this. NOTE: a --input ` +
+            `lifecycleRules=... on this run cannot satisfy this check — swamp gives ` +
+            `pre-flight checks the model's global arguments but not the method's ` +
+            `inputs, so the check cannot see it. The method itself still honours the ` +
+            `input; it is only this safety gate that is blind to it.`,
           ],
         };
       },
