@@ -1,7 +1,7 @@
 manifestVersion: 1
 
 name: "@sntxrr/b2-transfer"
-version: "2026.10.14.1"
+version: "2026.10.22.1"
 description: "Backblaze B2 data-plane transfers via the Native API v4 — the thirteen upload, download and large-file operations, guarded. Inventories the interrupted large uploads B2 bills for invisibly, proves a bucket is readable and writable end to end, and refuses to move more than 100 MB without an explicit override."
 license: MIT
 repository: "https://github.com/sntxrr/swamp-backblaze"

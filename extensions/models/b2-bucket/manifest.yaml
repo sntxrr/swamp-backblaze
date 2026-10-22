@@ -1,7 +1,7 @@
 manifestVersion: 1
 
 name: "@sntxrr/b2-bucket"
-version: "2026.10.14.1"
+version: "2026.10.22.1"
 description: "Manage one Backblaze B2 bucket via the B2 Native API v4 — sync, create, update, idempotent delete, and get/set event notification rules — with first-class lifecycle rules so restic-pruned hidden file versions are actually deleted."
 license: MIT
 repository: "https://github.com/sntxrr/swamp-backblaze"

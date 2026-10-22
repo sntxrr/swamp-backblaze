@@ -1,7 +1,7 @@
 manifestVersion: 1
 
 name: "@sntxrr/b2-account"
-version: "2026.10.14.1"
+version: "2026.10.22.1"
 description: "Inventory a Backblaze B2 account — one read-only scan method emits a resource per bucket and per application key, plus a summary, via the B2 Native API v4."
 license: MIT
 repository: "https://github.com/sntxrr/swamp-backblaze"

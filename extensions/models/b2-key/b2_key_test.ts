@@ -709,6 +709,38 @@ Deno.test("create surfaces an actionable error when the secret cannot be deliver
   );
 });
 
+Deno.test("create scrubs the secret from a Connect error body that echoes it", async () => {
+  const { ctx, writes } = makeContext(CONNECT_GLOBALS);
+  await withMockedFetch(
+    (url, init) => {
+      if (url.includes(`/v1/vaults/${VAULT_ID}/items`) && init.method === "POST") {
+        // A hypothetical validation error that quotes the submitted value.
+        return json({ message: `invalid field value "${SECRET}"` }, 400);
+      }
+      return createRouter(null)(url, init);
+    },
+    async () => {
+      const err = await assertRejects(
+        () => model.methods.create.execute(CREATE_INPUT, ctx),
+        Error,
+      );
+      assertStringIncludes(err.message, "[redacted]");
+      assertEquals(err.message.includes(SECRET), false);
+      assertEquals(JSON.stringify(writes).includes(SECRET), false);
+    },
+  );
+});
+
+Deno.test("create records secretDestination as a vault pointer, never the secret", async () => {
+  const { ctx, writes } = makeContext(CONNECT_GLOBALS);
+  await withMockedFetch(createRouter(null), async () => {
+    await model.methods.create.execute(CREATE_INPUT, ctx);
+    const dest = writes[0].data.secretDestination as string;
+    assertEquals(dest, `op://${VAULT_ID}/${ITEM_ID}/applicationKey`);
+    assertEquals(dest.includes(SECRET), false);
+  });
+});
+
 Deno.test("create refuses to silently orphan an existing key of the same name", async () => {
   const { ctx, writes } = makeContext(CONNECT_GLOBALS);
   await withMockedFetch(
